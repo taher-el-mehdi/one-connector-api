@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.db
+*.db-shm
+*.db-wal
+Data/
+appsettings.Local.json
+secrets.json
+.env
+Database/seed.local.json
+frontend
+Database

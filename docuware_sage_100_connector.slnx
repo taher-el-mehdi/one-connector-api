@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="docuware_sage_100_connector.csproj" />
+  <Project Path="..\docuware_sage_100_connector.Tests\docuware_sage_100_connector.Tests.csproj" />
+</Solution>
