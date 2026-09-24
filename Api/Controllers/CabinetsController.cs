@@ -20,34 +20,51 @@ public sealed class CabinetsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<FileCabinetDto>>> Get(CancellationToken cancellationToken)
     {
-        var cabinets = await _docuWare.ListFileCabinetsAsync(cancellationToken).ConfigureAwait(false);
-        var labels = await _mappings.GetLabelsAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(cabinets.Select(cabinet => new FileCabinetDto
+        try
         {
-            Id = cabinet.Id,
-            Name = cabinet.Name,
-            IsBasket = cabinet.IsBasket,
-            UsedFor = labels.EntityFor(cabinet.Name)
-        }).ToArray());
+            var cabinets = await _docuWare.ListFileCabinetsAsync(cancellationToken).ConfigureAwait(false);
+            var labels = await _mappings.GetLabelsAsync(cancellationToken).ConfigureAwait(false);
+            return Ok(cabinets.Select(cabinet => new FileCabinetDto
+            {
+                Id = cabinet.Id,
+                Name = cabinet.Name,
+                IsBasket = cabinet.IsBasket,
+                UsedFor = labels.EntityFor(cabinet.Name)
+            }).ToArray());
+        }
+        catch (Exception ex)
+        {
+            return Unavailable(ex);
+        }
     }
 
     [HttpGet("{id}")]
     public async Task<ActionResult<FileCabinetDetailDto>> GetOne(string id, CancellationToken cancellationToken)
     {
-        var cabinet = await _docuWare.GetFileCabinetAsync(id, cancellationToken).ConfigureAwait(false);
-        if (cabinet is null)
+        try
         {
-            return NotFound();
-        }
+            var cabinet = await _docuWare.GetFileCabinetAsync(id, cancellationToken).ConfigureAwait(false);
+            if (cabinet is null)
+            {
+                return NotFound();
+            }
 
-        var labels = await _mappings.GetLabelsAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(new FileCabinetDetailDto
+            var labels = await _mappings.GetLabelsAsync(cancellationToken).ConfigureAwait(false);
+            return Ok(new FileCabinetDetailDto
+            {
+                Id = cabinet.Id,
+                Name = cabinet.Name,
+                IsBasket = cabinet.IsBasket,
+                UsedFor = labels.EntityFor(cabinet.Name),
+                Fields = cabinet.Fields
+            });
+        }
+        catch (Exception ex)
         {
-            Id = cabinet.Id,
-            Name = cabinet.Name,
-            IsBasket = cabinet.IsBasket,
-            UsedFor = labels.EntityFor(cabinet.Name),
-            Fields = cabinet.Fields
-        });
+            return Unavailable(ex);
+        }
     }
+
+    private ObjectResult Unavailable(Exception exception) =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
 }

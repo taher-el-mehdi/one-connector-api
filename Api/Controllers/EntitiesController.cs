@@ -19,16 +19,26 @@ public sealed class SuppliersController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<SupplierDto>>> Get(CancellationToken cancellationToken)
     {
-        var rows = await _sage.Get(EntityType.Supplier).GetAllAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(rows.Select(row => new SupplierDto
+        try
         {
-            Number = row.Key,
-            Title = row.Columns.GetValueOrDefault("CT_Intitule")?.ToString(),
-            Type = row.Columns.GetValueOrDefault("CT_Type"),
-            City = row.Columns.GetValueOrDefault("CT_Ville")?.ToString(),
-            Email = row.Columns.GetValueOrDefault("CT_EMail")?.ToString()
-        }).ToArray());
+            var rows = await _sage.Get(EntityType.Supplier).GetAllAsync(cancellationToken).ConfigureAwait(false);
+            return Ok(rows.Select(row => new SupplierDto
+            {
+                Number = row.Key,
+                Title = row.Columns.GetValueOrDefault("CT_Intitule")?.ToString(),
+                Type = row.Columns.GetValueOrDefault("CT_Type"),
+                City = row.Columns.GetValueOrDefault("CT_Ville")?.ToString(),
+                Email = row.Columns.GetValueOrDefault("CT_EMail")?.ToString()
+            }).ToArray());
+        }
+        catch (Exception ex)
+        {
+            return Unavailable(ex);
+        }
     }
+
+    private ObjectResult Unavailable(Exception exception) =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
 }
 
 [ApiController]
@@ -45,14 +55,24 @@ public sealed class AccountsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<ChartOfAccountsDto>>> Get(CancellationToken cancellationToken)
     {
-        var rows = await _sage.Get(EntityType.ChartOfAccounts).GetAllAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(rows.Select(row => new ChartOfAccountsDto
+        try
         {
-            Number = row.Key,
-            Title = row.Columns.GetValueOrDefault("CG_Intitule")?.ToString(),
-            Nature = row.Columns.GetValueOrDefault("N_Nature")
-        }).ToArray());
+            var rows = await _sage.Get(EntityType.ChartOfAccounts).GetAllAsync(cancellationToken).ConfigureAwait(false);
+            return Ok(rows.Select(row => new ChartOfAccountsDto
+            {
+                Number = row.Key,
+                Title = row.Columns.GetValueOrDefault("CG_Intitule")?.ToString(),
+                Nature = row.Columns.GetValueOrDefault("N_Nature")
+            }).ToArray());
+        }
+        catch (Exception ex)
+        {
+            return Unavailable(ex);
+        }
     }
+
+    private ObjectResult Unavailable(Exception exception) =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
 }
 
 [ApiController]
@@ -69,11 +89,21 @@ public sealed class AnalyticSectionsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<AnalyticSectionDto>>> Get(CancellationToken cancellationToken)
     {
-        var rows = await _sage.Get(EntityType.AnalyticSection).GetAllAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(rows.Select(row => new AnalyticSectionDto
+        try
         {
-            Code = row.Key,
-            Description = row.Columns.GetValueOrDefault("CA_Intitule")?.ToString()
-        }).ToArray());
+            var rows = await _sage.Get(EntityType.AnalyticSection).GetAllAsync(cancellationToken).ConfigureAwait(false);
+            return Ok(rows.Select(row => new AnalyticSectionDto
+            {
+                Code = row.Key,
+                Description = row.Columns.GetValueOrDefault("CA_Intitule")?.ToString()
+            }).ToArray());
+        }
+        catch (Exception ex)
+        {
+            return Unavailable(ex);
+        }
     }
+
+    private ObjectResult Unavailable(Exception exception) =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = exception.Message });
 }
