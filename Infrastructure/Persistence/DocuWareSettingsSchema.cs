@@ -8,9 +8,7 @@ internal static class DocuWareSettingsSchema
 
     public static void Ensure(MySqlConnection connection)
     {
-        EnsureTable(connection, "setting_docuware");
-        EnsureTable(connection, "setting_erp");
-        EnsureTable(connection, "setting_synchronization");
+        EnsureTable(connection, SettingTable.Name);
     }
 
     private static void EnsureTable(MySqlConnection connection, string table)

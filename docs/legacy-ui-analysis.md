@@ -66,7 +66,7 @@ Persistent behaviors:
 | Run one DocuWare document | `POST /api/sync/document/{documentId}` |
 | See recent activity, direction, entity, and errors | `GET /api/sync/status` and `GET /api/sync/errors` |
 | Retry a failed record | `POST /api/sync/retry/{syncId}` (the API sets `Force`) |
-| Browse Sage suppliers, accounts, and sections | `GET /api/suppliers`, `/api/accounts`, `/api/sections` |
+| Browse Sage tables (configured mappings) | `GET /api/entities/tables` |
 | Mask secrets in the UI | Configuration returns `passwordConfigured` / `clientSecretConfigured`, never the secret |
 | Confirm destructive or forceful actions | Confirmation dialog before a full cycle and before retry |
 | Toast feedback | Sonner toasts. No `alert()` |

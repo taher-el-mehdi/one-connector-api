@@ -132,17 +132,16 @@ public sealed class SageMappingRelocation
 
         await using var mysql = new MySqlConnection(_connectionString);
         await mysql.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var company = await ConnectorCompany.RequireAsync(mysql, cancellationToken).ConfigureAwait(false);
         var actor = await FirstUserAsync(mysql, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
         await using var transaction = await mysql.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var mapping in mappings)
         {
-            var id = await InsertMappingAsync(mysql, transaction, company, mapping, actor, now, cancellationToken)
+            var id = await InsertMappingAsync(mysql, transaction, mapping, actor, now, cancellationToken)
                 .ConfigureAwait(false);
             foreach (var field in fields.Where(item => item.MappingId == mapping.Id))
             {
-                await InsertFieldAsync(mysql, transaction, company, id, field, actor, now, cancellationToken)
+                await InsertFieldAsync(mysql, transaction, id, field, actor, now, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -154,7 +153,6 @@ public sealed class SageMappingRelocation
     private static async Task<int> InsertMappingAsync(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string company,
         SageMappingRow mapping,
         string actor,
         DateTime now,
@@ -164,12 +162,11 @@ public sealed class SageMappingRelocation
             """
             SELECT id
             FROM mapping_table
-            WHERE company = @company AND entity_name = @entityName AND cabinet_name = @cabinetName
+            WHERE entity_name = @entityName AND cabinet_name = @cabinetName
             LIMIT 1
             """,
             connection,
             transaction);
-        existing.Parameters.AddWithValue("@company", company);
         existing.Parameters.AddWithValue("@entityName", mapping.EntityName);
         existing.Parameters.AddWithValue("@cabinetName", mapping.CabinetName);
         var found = await existing.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -181,13 +178,12 @@ public sealed class SageMappingRelocation
         await using var command = new MySqlCommand(
             """
             INSERT INTO mapping_table
-                (company, entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
+                (entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
             VALUES
-                (@company, @entityName, @cabinetName, @actor, @now, @now, @actor)
+                (@entityName, @cabinetName, @actor, @now, @now, @actor)
             """,
             connection,
             transaction);
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@entityName", mapping.EntityName);
         command.Parameters.AddWithValue("@cabinetName", mapping.CabinetName);
         command.Parameters.AddWithValue("@actor", actor);
@@ -199,7 +195,6 @@ public sealed class SageMappingRelocation
     private static async Task InsertFieldAsync(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string company,
         int mappingId,
         SageFieldRow field,
         string actor,
@@ -249,15 +244,14 @@ public sealed class SageMappingRelocation
         await using var command = new MySqlCommand(
             """
             INSERT INTO mapping_field
-                (company, id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
+                (id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
                  entity_type_long, cabinet_type_long, created_by, created_at, updated_at, updated_by)
             VALUES
-                (@company, @mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
+                (@mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
                  @entityTypeLong, @cabinetTypeLong, @actor, @now, @now, @actor)
             """,
             connection,
             transaction);
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@mappingId", mappingId);
         command.Parameters.AddWithValue("@entityFieldName", field.EntityFieldName);
         command.Parameters.AddWithValue("@cabinetFieldName", field.CabinetFieldName);

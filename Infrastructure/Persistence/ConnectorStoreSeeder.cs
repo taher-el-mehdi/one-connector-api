@@ -17,9 +17,9 @@ internal static class ConnectorStoreSeeder
 
     public static void EnsureSeeded(MySqlConnection connection, byte[] secretsKey, string contentRoot)
     {
-        var company = FindCompany(connection);
+        var settingsReady = HasSettings(connection);
         var userCount = CountUsers(connection);
-        if (company is not null && userCount > 0)
+        if (settingsReady && userCount > 0)
         {
             return;
         }
@@ -28,9 +28,9 @@ internal static class ConnectorStoreSeeder
         if (!File.Exists(seedPath))
         {
             throw new InvalidOperationException(
-                company is null
-                    ? "The connector store has no company. Add Database/seed.local.json and start the API again. The file is imported once and is not committed."
-                    : "The connector store has no operator account. Add an Operator section to Database/seed.local.json and start the API again.");
+                settingsReady
+                    ? "The connector store has no operator account. Add an Operator section to Database/seed.local.json and start the API again."
+                    : "The connector store has no settings. Add Database/seed.local.json and start the API again. The file is imported once and is not committed.");
         }
 
         var document = JsonSerializer.Deserialize<SeedDocument>(File.ReadAllText(seedPath), JsonOptions)
@@ -39,9 +39,9 @@ internal static class ConnectorStoreSeeder
         using var transaction = connection.BeginTransaction();
         try
         {
-            if (company is null)
+            if (!settingsReady)
             {
-                InsertCompany(connection, transaction, secretsKey, document);
+                InsertSettings(connection, transaction, secretsKey, document);
             }
 
             if (userCount == 0)
@@ -58,7 +58,7 @@ internal static class ConnectorStoreSeeder
         }
     }
 
-    private static void InsertCompany(
+    private static void InsertSettings(
         MySqlConnection connection,
         MySqlTransaction transaction,
         byte[] secretsKey,
@@ -70,63 +70,55 @@ internal static class ConnectorStoreSeeder
         docuWare.FileCabinets ??= new DocuWareFileCabinetsOptions();
         Validate(docuWare, sage, synchronization, document.Tracking ?? new TrackingOptions());
 
-        Execute(
-            connection,
-            transaction,
-            """
-            INSERT INTO company (name, label, plan)
-            VALUES (@name, @label, @plan)
-            """,
-            command =>
-            {
-                command.Parameters.AddWithValue("@name", ConnectorCompany.Name);
-                command.Parameters.AddWithValue("@label", ConnectorCompany.Label);
-                command.Parameters.AddWithValue("@plan", ConnectorCompany.Plan);
-            });
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.PlatformUrl, docuWare.PlatformUrl);
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.Organization, docuWare.Organization ?? string.Empty);
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.AuthenticationMode, docuWare.AuthenticationMode.ToString());
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.UserName, docuWare.UserName ?? string.Empty);
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.PasswordProtected, SecretProtector.Protect(docuWare.Password, secretsKey));
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.ClientId, docuWare.ClientId ?? string.Empty);
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.ClientSecretProtected, SecretProtector.Protect(docuWare.ClientSecret, secretsKey));
+        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.Scope, string.IsNullOrWhiteSpace(docuWare.Scope) ? "docuware.platform openid" : docuWare.Scope);
 
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.PlatformUrl, docuWare.PlatformUrl);
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.Organization, docuWare.Organization ?? string.Empty);
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.AuthenticationMode, docuWare.AuthenticationMode.ToString());
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.UserName, docuWare.UserName ?? string.Empty);
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.PasswordProtected, SecretProtector.Protect(docuWare.Password, secretsKey));
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.ClientId, docuWare.ClientId ?? string.Empty);
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.ClientSecretProtected, SecretProtector.Protect(docuWare.ClientSecret, secretsKey));
-        InsertSetting(connection, transaction, "setting_docuware", SettingKeys.Scope, string.IsNullOrWhiteSpace(docuWare.Scope) ? "docuware.platform openid" : docuWare.Scope);
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.ServerName, sage.Server);
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.DatabaseName, sage.Database);
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.AuthentificationMode, sage.Authentication.ToString());
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.UserName, sage.UserName ?? string.Empty);
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.PasswordProtected, SecretProtector.Protect(sage.Password, secretsKey));
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.TrustServerCertificate, sage.TrustServerCertificate ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.CommandTimeoutSeconds, sage.CommandTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.SuppliersOnly, sage.SuppliersOnly ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.ChartTypeZeroOnly, sage.ChartOfAccountsTypeZeroOnly ? "true" : "false");
 
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.ServerName, sage.Server);
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.DatabaseName, sage.Database);
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.AuthentificationMode, sage.Authentication.ToString());
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.UserName, sage.UserName ?? string.Empty);
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.PasswordProtected, SecretProtector.Protect(sage.Password, secretsKey));
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.TrustServerCertificate, sage.TrustServerCertificate ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.CommandTimeoutSeconds, sage.CommandTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.SuppliersOnly, sage.SuppliersOnly ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_erp", SettingKeys.ChartTypeZeroOnly, sage.ChartOfAccountsTypeZeroOnly ? "true" : "false");
-
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.Enabled, synchronization.Enabled ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.IntervalSeconds, synchronization.IntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.MaxRetries, synchronization.MaxRetries.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.FirstRetryDelaySeconds, synchronization.FirstRetryDelaySeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.InsertMissingInSage, synchronization.InsertMissingInSage ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.ApplySageWrites, synchronization.ApplySageWrites ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.SageToDocuWare, synchronization.SageToDocuWare ? "true" : "false");
-        InsertSetting(connection, transaction, "setting_synchronization", SettingKeys.DocuWareToSage, synchronization.DocuWareToSage ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.Enabled, synchronization.Enabled ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.IntervalSeconds, synchronization.IntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.MaxRetries, synchronization.MaxRetries.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.FirstRetryDelaySeconds, synchronization.FirstRetryDelaySeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.InsertMissingInSage, synchronization.InsertMissingInSage ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.ApplySageWrites, synchronization.ApplySageWrites ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.SageToDocuWare, synchronization.SageToDocuWare ? "true" : "false");
+        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.DocuWareToSage, synchronization.DocuWareToSage ? "true" : "false");
     }
 
     private static void InsertSetting(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string table,
+        string type,
+        string description,
         string key,
         string? value)
     {
         Execute(
             connection,
             transaction,
-            $"INSERT INTO {table} (company, `key`, `value`) VALUES (@company, @key, @value)",
+            """
+            INSERT INTO setting (type, code, description, `key`, `value`)
+            VALUES (@type, @code, @description, @key, @value)
+            """,
             command =>
             {
-                command.Parameters.AddWithValue("@company", ConnectorCompany.Name);
+                command.Parameters.AddWithValue("@type", type);
+                command.Parameters.AddWithValue("@code", type);
+                command.Parameters.AddWithValue("@description", description);
                 command.Parameters.AddWithValue("@key", key);
                 command.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
             });
@@ -199,11 +191,10 @@ internal static class ConnectorStoreSeeder
         }
     }
 
-    private static string? FindCompany(MySqlConnection connection)
+    private static bool HasSettings(MySqlConnection connection)
     {
-        using var command = new MySqlCommand("SELECT name FROM company LIMIT 1", connection);
-        var value = command.ExecuteScalar();
-        return value is null or DBNull ? null : Convert.ToString(value);
+        using var command = new MySqlCommand("SELECT COUNT(*) FROM setting", connection);
+        return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
     private static int CountUsers(MySqlConnection connection)

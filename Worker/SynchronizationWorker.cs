@@ -40,11 +40,10 @@ public sealed class SynchronizationWorker : BackgroundService
 
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Synchronization worker is disabled. Manual API sync remains available.");
+            _logger.LogInformation("Synchronization worker is disabled. Manual sync from a synchronization remains available.");
         }
         else
         {
-            await RunCycleSafeAsync(new SyncCycleRequest(), stoppingToken).ConfigureAwait(false);
             await RunDueSynchronizationsAsync(stoppingToken).ConfigureAwait(false);
         }
 
@@ -96,8 +95,6 @@ public sealed class SynchronizationWorker : BackgroundService
 
                 await RunDueSynchronizationsAsync(stoppingToken).ConfigureAwait(false);
             }
-
-            await RunCycleSafeAsync(request, stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -227,23 +224,6 @@ public sealed class SynchronizationWorker : BackgroundService
         }
 
         return true;
-    }
-
-    private async Task RunCycleSafeAsync(SyncCycleRequest request, CancellationToken stoppingToken)
-    {
-        try
-        {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var orchestrator = scope.ServiceProvider.GetRequiredService<ISynchronizationOrchestrator>();
-            await orchestrator.RunCycleAsync(request, stoppingToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Synchronization cycle failed. The worker will continue.");
-        }
     }
 
     private static async Task WaitTimerAsync(PeriodicTimer timer, CancellationToken cancellationToken)

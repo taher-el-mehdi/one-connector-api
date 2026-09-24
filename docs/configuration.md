@@ -45,7 +45,7 @@ Cabinet GUIDs from any other environment must not be committed. Resolve by name 
 
 ### Tracking
 
-Synchronization state is the MySQL table `logs`, scoped to the company.
+Synchronization state is the MySQL table `logs`.
 
 ## Connector store
 
@@ -61,19 +61,15 @@ The process needs a MySQL connection before it can read DocuWare, Sage, synchron
 | `ConnectorStore__SslMode` | `Preferred`, `Required`, or `None` |
 | `ConnectorStore__SecretsKey` | Base64 32-byte key. Encrypts DocuWare and Sage passwords at rest. The same key must stay with the data. |
 
-Startup applies the SQL in `Database/Migrations`. While `company` or `user` is empty, the API imports `Database/seed.local.json` once. That file is not committed. After the import, change rows in MySQL and restart the API.
+Startup applies the SQL in `Database/Migrations`. While `setting` or `user` is empty, the API imports `Database/seed.local.json` once. That file is not committed. After the import, change rows in MySQL and restart the API.
 
 In Development, `appsettings.Development.json` forces `Synchronization:Enabled` to `false` so the worker does not poll. The database keeps the stored value.
 
 | Table | Columns | Role |
 |---|---|---|
-| `company` | `name`, `label`, `plan` (`paid` or `free`) | One row per customer. Settings point at `name` |
-| `setting_docuware` | `company`, `key`, `value` | DocuWare platform URL, user, and encrypted password |
-| `setting_erp` | `company`, `key`, `value` | Sage SQL Server instance and company database |
-| `setting_synchronization` | `company`, `key`, `value` | Interval, retries, and direction flags |
+| `setting` | `type` (`Docuware`, `Sage`, `synchronization`), `code`, `description`, `key`, `value` | One row per setting. Each configuration code keeps the keys for its type |
 | `user` | account columns | Operators. `password_hash` is an ASP.NET Identity hash |
-| `leads` | demo request fields | Landing-page requests |
-| `logs` | direction, entity, status, timestamps, error | Synchronization state for the company |
+| `logs` | id_synchronization, status, error_message, file (JSON), timestamps | Synchronization state |
 
 Cabinet names stay the code defaults (`Fournisseur`, `Plan Comptable`, `Section analytique`). Synchronization state is `logs`.
 

@@ -1,37 +1,23 @@
 using System.Threading.Channels;
 using DocuWareSageConnector.Application.DTOs;
 using DocuWareSageConnector.Application.Interfaces;
+using DocuWareSageConnector.Application.UseCases;
 using DocuWareSageConnector.Domain.Enums;
-using DocuWareSageConnector.Infrastructure.Configuration;
-using Microsoft.Extensions.Options;
 
 namespace DocuWareSageConnector.Application.Services;
 
 public sealed class SynchronizationOrchestrator : ISynchronizationOrchestrator
 {
-    private static readonly EntityType[] AllEntities =
-    [
-        EntityType.Supplier,
-        EntityType.ChartOfAccounts,
-        EntityType.AnalyticSection
-    ];
-
-    private readonly ISageToDocuWareSyncUseCase _sageToDocuWare;
-    private readonly IDocuWareToSageSyncUseCase _docuWareToSage;
-    private readonly SynchronizationOptions _options;
+    private readonly IMappedSageToDocuWareSync _mappedSageToDocuWare;
     private readonly ISyncStatusSnapshot _snapshot;
     private readonly ILogger<SynchronizationOrchestrator> _logger;
 
     public SynchronizationOrchestrator(
-        ISageToDocuWareSyncUseCase sageToDocuWare,
-        IDocuWareToSageSyncUseCase docuWareToSage,
-        IOptions<SynchronizationOptions> options,
+        IMappedSageToDocuWareSync mappedSageToDocuWare,
         ISyncStatusSnapshot snapshot,
         ILogger<SynchronizationOrchestrator> logger)
     {
-        _sageToDocuWare = sageToDocuWare;
-        _docuWareToSage = docuWareToSage;
-        _options = options.Value;
+        _mappedSageToDocuWare = mappedSageToDocuWare;
         _snapshot = snapshot;
         _logger = logger;
     }
@@ -41,9 +27,7 @@ public sealed class SynchronizationOrchestrator : ISynchronizationOrchestrator
         var syncId = Guid.NewGuid();
         var started = DateTimeOffset.UtcNow;
         var results = new List<EntitySyncResult>();
-        var entities = request.EntityType is { } one ? new[] { one } : AllEntities;
-        var sageToDocuWare = request.SageToDocuWare ?? _options.SageToDocuWare;
-        var docuWareToSage = request.DocuWareToSage ?? _options.DocuWareToSage;
+        var sageToDocuWare = request.SageToDocuWare ?? true;
 
         _logger.LogInformation(
             "SyncId={SyncId} SynchronizationId={SynchronizationId} Status=Started",
@@ -53,25 +37,13 @@ public sealed class SynchronizationOrchestrator : ISynchronizationOrchestrator
         try
         {
             _snapshot.BeginCycle(syncId);
-            foreach (var entityType in entities)
+            if (request.SynchronizationId is int synchronizationId && sageToDocuWare)
             {
-                if (sageToDocuWare)
-                {
-                    results.Add(await RunDirectionAsync(
-                        entityType,
-                        SyncDirection.SageToDocuWare,
-                        () => _sageToDocuWare.ExecuteAsync(entityType, request, syncId, cancellationToken),
-                        syncId).ConfigureAwait(false));
-                }
-
-                if (docuWareToSage)
-                {
-                    results.Add(await RunDirectionAsync(
-                        entityType,
-                        SyncDirection.DocuWareToSage,
-                        () => _docuWareToSage.ExecuteAsync(entityType, request, syncId, cancellationToken),
-                        syncId).ConfigureAwait(false));
-                }
+                results.Add(await RunDirectionAsync(
+                    EntityType.Supplier,
+                    SyncDirection.SageToDocuWare,
+                    () => _mappedSageToDocuWare.ExecuteAsync(synchronizationId, syncId, request.Force, cancellationToken),
+                    syncId).ConfigureAwait(false));
             }
 
             var completed = new SyncCycleResult

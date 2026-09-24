@@ -119,6 +119,89 @@ public sealed class SynchronizationsController : ControllerBase
         }
     }
 
+    [HttpGet("{id:int}/filters")]
+    public async Task<ActionResult<SynchronizationFilterListDto>> GetFilters(int id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var list = await _synchronizations.ListFiltersAsync(id, cancellationToken).ConfigureAwait(false);
+            return list is null ? NotFound() : Ok(list);
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("{id:int}/filters")]
+    public async Task<ActionResult<SynchronizationFilterDto>> CreateFilter(
+        int id,
+        SaveSynchronizationFilterRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var created = await _synchronizations.CreateFilterAsync(id, request, userId, cancellationToken).ConfigureAwait(false);
+            return created is null ? NotFound() : Ok(created);
+        }
+        catch (Exception ex)
+        {
+            if (ClientError(ex) is { } error)
+            {
+                return error;
+            }
+
+            throw;
+        }
+    }
+
+    [HttpPut("{id:int}/filters/{filterId:int}")]
+    public async Task<ActionResult<SynchronizationFilterDto>> UpdateFilter(
+        int id,
+        int filterId,
+        SaveSynchronizationFilterRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var updated = await _synchronizations.UpdateFilterAsync(id, filterId, request, userId, cancellationToken).ConfigureAwait(false);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (Exception ex)
+        {
+            if (ClientError(ex) is { } error)
+            {
+                return error;
+            }
+
+            throw;
+        }
+    }
+
+    [HttpDelete("{id:int}/filters/{filterId:int}")]
+    public async Task<IActionResult> DeleteFilter(int id, int filterId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var deleted = await _synchronizations.DeleteFilterAsync(id, filterId, cancellationToken).ConfigureAwait(false);
+            return deleted ? NoContent() : NotFound();
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
     [HttpPost("{id:int}/run")]
     public async Task<ActionResult<SynchronizationRecordDto>> Run(int id, CancellationToken cancellationToken)
     {

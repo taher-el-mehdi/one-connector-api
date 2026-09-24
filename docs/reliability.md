@@ -4,7 +4,15 @@
 
 MySQL table `logs` (connector-owned, not a Sage table):
 
-`Direction`, `EntityType`, `SageNumber`, `DocuWareDocumentId`, `Status`, `CreatedAt`, `UpdatedAt`, `LastAttemptAt`, `LastSuccessAt`, `RetryCount`, `LastError`, `Fingerprint`
+| Column | Role |
+|---|---|
+| `id` | Row id |
+| `id_synchronization` | Optional FK to `synchronization.id` |
+| `status` | Pending / Processing / Completed / Failed / Skipped |
+| `created_at`, `updated_at`, `last_attempt_at`, `last_success_at` | Timestamps |
+| `retry_count` | Failure budget counter |
+| `error_message` | Failure text |
+| `file` | JSON payload (`direction`, `entityType`, `sageNumber`, `docuWareDocumentId`, `fingerprint`) |
 
 Statuses: `Pending`, `Processing`, `Completed`, `Failed`, `Skipped`.
 
@@ -21,10 +29,10 @@ Polly retry pipeline wraps DocuWare SDK calls.
 
 ## Logging
 
-Structured log templates include `SyncId`, `Direction`, `Entity`, `SageNumber`, `DocuWareDocumentId`, `Status`.
+Structured log templates include `SyncId`, `SynchronizationId`, `Direction`, `Entity`, `SageNumber`, `DocuWareDocumentId`, `Status`.
 
 Passwords, OAuth tokens, and client secrets are never logged.
 
 ## Error isolation
 
-A failure on one supplier/account/section is stored on that tracking row. The worker continues with the next item and the next direction.
+A failure on one supplier/account/section is stored on that tracking row (`error_message` + `file`). The worker continues with the next item and the next direction.

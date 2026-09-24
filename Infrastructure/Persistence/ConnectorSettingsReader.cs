@@ -9,11 +9,62 @@ internal static class ConnectorSettingsReader
 {
     public static Dictionary<string, string?> Read(MySqlConnection connection, byte[] secretsKey)
     {
-        var company = FindCompany(connection)
-            ?? throw new InvalidOperationException("The connector store has no company.");
-        var docuWareMap = ReadMap(connection, "setting_docuware", company);
-        var erpMap = ReadMap(connection, "setting_erp", company);
-        var syncMap = ReadMap(connection, "setting_synchronization", company);
+        var (docuWare, sage, synchronization) = ReadOptions(connection, secretsKey);
+        return ConnectorConfigurationMap.From(
+            docuWare,
+            sage,
+            synchronization,
+            new TrackingOptions { DatabasePath = "logs" });
+    }
+
+    public static void Apply(
+        MySqlConnection connection,
+        byte[] secretsKey,
+        DocuWareOptions docuWare,
+        SageOptions sage,
+        SynchronizationOptions synchronization)
+    {
+        var (nextDocuWare, nextSage, nextSynchronization) = ReadOptions(connection, secretsKey);
+        docuWare.PlatformUrl = nextDocuWare.PlatformUrl;
+        docuWare.Organization = nextDocuWare.Organization;
+        docuWare.AuthenticationMode = nextDocuWare.AuthenticationMode;
+        docuWare.UserName = nextDocuWare.UserName;
+        docuWare.Password = nextDocuWare.Password;
+        docuWare.ClientId = nextDocuWare.ClientId;
+        docuWare.ClientSecret = nextDocuWare.ClientSecret;
+        docuWare.Scope = nextDocuWare.Scope;
+        docuWare.Configured = nextDocuWare.Configured;
+        docuWare.Status = nextDocuWare.Status;
+        sage.Server = nextSage.Server;
+        sage.Database = nextSage.Database;
+        sage.Authentication = nextSage.Authentication;
+        sage.UserName = nextSage.UserName;
+        sage.Password = nextSage.Password;
+        sage.TrustServerCertificate = nextSage.TrustServerCertificate;
+        sage.CommandTimeoutSeconds = nextSage.CommandTimeoutSeconds;
+        sage.SuppliersOnly = nextSage.SuppliersOnly;
+        sage.ChartOfAccountsTypeZeroOnly = nextSage.ChartOfAccountsTypeZeroOnly;
+        sage.Configured = nextSage.Configured;
+        sage.Status = nextSage.Status;
+        synchronization.Enabled = nextSynchronization.Enabled;
+        synchronization.IntervalSeconds = nextSynchronization.IntervalSeconds;
+        synchronization.MaxRetries = nextSynchronization.MaxRetries;
+        synchronization.FirstRetryDelaySeconds = nextSynchronization.FirstRetryDelaySeconds;
+        synchronization.InsertMissingInSage = nextSynchronization.InsertMissingInSage;
+        synchronization.ApplySageWrites = nextSynchronization.ApplySageWrites;
+        synchronization.SageToDocuWare = nextSynchronization.SageToDocuWare;
+        synchronization.DocuWareToSage = nextSynchronization.DocuWareToSage;
+        synchronization.Configured = nextSynchronization.Configured;
+        synchronization.Status = nextSynchronization.Status;
+    }
+
+    private static (DocuWareOptions DocuWare, SageOptions Sage, SynchronizationOptions Synchronization) ReadOptions(
+        MySqlConnection connection,
+        byte[] secretsKey)
+    {
+        var docuWareMap = ReadMap(connection, SettingTable.DocuWare);
+        var erpMap = ReadMap(connection, SettingTable.Sage);
+        var syncMap = ReadMap(connection, SettingTable.Synchronization);
 
         var docuWare = new DocuWareOptions
         {
@@ -27,8 +78,8 @@ internal static class ConnectorSettingsReader
             ClientId = Text(docuWareMap, SettingKeys.ClientId),
             ClientSecret = SecretProtector.Unprotect(Optional(docuWareMap, SettingKeys.ClientSecretProtected), secretsKey),
             Scope = Text(docuWareMap, SettingKeys.Scope, "docuware.platform openid"),
-            Configured = Flag(connection, company, "setting_docuware", "configured"),
-            Status = Flag(connection, company, "setting_docuware", "status")
+            Configured = Flag(connection, SettingTable.DocuWare, "configured"),
+            Status = Flag(connection, SettingTable.DocuWare, "status")
         };
         var sage = new SageOptions
         {
@@ -43,8 +94,8 @@ internal static class ConnectorSettingsReader
             CommandTimeoutSeconds = Int(erpMap, SettingKeys.CommandTimeoutSeconds, 30),
             SuppliersOnly = Bool(erpMap, SettingKeys.SuppliersOnly, true),
             ChartOfAccountsTypeZeroOnly = Bool(erpMap, SettingKeys.ChartTypeZeroOnly, true),
-            Configured = Flag(connection, company, "setting_erp", "configured"),
-            Status = Flag(connection, company, "setting_erp", "status")
+            Configured = Flag(connection, SettingTable.Sage, "configured"),
+            Status = Flag(connection, SettingTable.Sage, "status")
         };
         var synchronization = new SynchronizationOptions
         {
@@ -56,41 +107,24 @@ internal static class ConnectorSettingsReader
             ApplySageWrites = Bool(syncMap, SettingKeys.ApplySageWrites, true),
             SageToDocuWare = Bool(syncMap, SettingKeys.SageToDocuWare, true),
             DocuWareToSage = Bool(syncMap, SettingKeys.DocuWareToSage, true),
-            Configured = Flag(connection, company, "setting_synchronization", "configured"),
-            Status = Flag(connection, company, "setting_synchronization", "status")
+            Configured = Flag(connection, SettingTable.Synchronization, "configured"),
+            Status = Flag(connection, SettingTable.Synchronization, "status")
         };
 
-        return ConnectorConfigurationMap.From(
-            docuWare,
-            sage,
-            synchronization,
-            new TrackingOptions { DatabasePath = "logs" });
+        return (docuWare, sage, synchronization);
     }
 
-    private static string? FindCompany(MySqlConnection connection)
-    {
-        using var command = new MySqlCommand(
-            "SELECT name FROM company WHERE name = @name LIMIT 1",
-            connection);
-        command.Parameters.AddWithValue("@name", ConnectorCompany.Name);
-        var named = command.ExecuteScalar();
-        if (named is not null and not DBNull)
-        {
-            return Convert.ToString(named);
-        }
-
-        using var any = new MySqlCommand("SELECT name FROM company ORDER BY name LIMIT 1", connection);
-        var value = any.ExecuteScalar();
-        return value is null or DBNull ? null : Convert.ToString(value);
-    }
-
-    private static Dictionary<string, string?> ReadMap(MySqlConnection connection, string table, string company)
+    private static Dictionary<string, string?> ReadMap(MySqlConnection connection, string type)
     {
         var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         using var command = new MySqlCommand(
-            $"SELECT `key`, `value` FROM {table} WHERE company = @company",
+            """
+            SELECT `key`, `value` FROM setting
+            WHERE type = @type AND code = @code
+            """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
+        command.Parameters.AddWithValue("@type", type);
+        command.Parameters.AddWithValue("@code", type);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -101,12 +135,17 @@ internal static class ConnectorSettingsReader
         return map;
     }
 
-    private static bool Flag(MySqlConnection connection, string company, string table, string column)
+    private static bool Flag(MySqlConnection connection, string type, string column)
     {
         using var command = new MySqlCommand(
-            $"SELECT `{column}` FROM {table} WHERE company = @company LIMIT 1",
+            $"""
+            SELECT `{column}` FROM setting
+            WHERE type = @type AND code = @code
+            LIMIT 1
+            """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
+        command.Parameters.AddWithValue("@type", type);
+        command.Parameters.AddWithValue("@code", type);
         var value = command.ExecuteScalar();
         if (value is null or DBNull)
         {

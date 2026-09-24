@@ -19,6 +19,7 @@ public sealed class ConfigurationController : ControllerBase
     private readonly IDocuWareSettingsStore _docuWareSettings;
     private readonly ISageSettingsStore _sageSettings;
     private readonly ISynchronizationSettingsStore _synchronizationSettings;
+    private readonly IConfigurationCatalog _catalog;
     private readonly IConnectorIdentity _identity;
 
     public ConfigurationController(
@@ -29,6 +30,7 @@ public sealed class ConfigurationController : ControllerBase
         IDocuWareSettingsStore docuWareSettings,
         ISageSettingsStore sageSettings,
         ISynchronizationSettingsStore synchronizationSettings,
+        IConfigurationCatalog catalog,
         IConnectorIdentity identity)
     {
         _docuWare = docuWare.Value;
@@ -38,6 +40,7 @@ public sealed class ConfigurationController : ControllerBase
         _docuWareSettings = docuWareSettings;
         _sageSettings = sageSettings;
         _synchronizationSettings = synchronizationSettings;
+        _catalog = catalog;
         _identity = identity;
     }
 
@@ -51,8 +54,55 @@ public sealed class ConfigurationController : ControllerBase
             Tracking = new PublicTrackingConfiguration
             {
                 DatabasePath = _tracking.DatabasePath
-            }
+            },
+            Entries = await _catalog.ListAsync(cancellationToken).ConfigureAwait(false)
         });
+
+    [HttpGet("rows")]
+    public async Task<ActionResult<IReadOnlyList<ConfigurationSettingRow>>> Rows(CancellationToken cancellationToken) =>
+        Ok(await _catalog.ListRowsAsync(cancellationToken).ConfigureAwait(false));
+
+    [HttpPost("import")]
+    public async Task<ActionResult<ImportConfigurationResult>> Import(
+        List<ConfigurationSettingRow> rows,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var result = await _catalog.ImportAsync(rows, userId, cancellationToken).ConfigureAwait(false);
+            return Ok(result);
+        }
+        catch (SettingsValidationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<ConfigurationEntry>> Create(
+        CreateConfigurationRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var created = await _catalog.CreateAsync(request, userId, cancellationToken).ConfigureAwait(false);
+            return Ok(created);
+        }
+        catch (SettingsValidationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
 
     [HttpPut("docuware")]
     public async Task<ActionResult<PublicDocuWareConfiguration>> UpdateDocuWare(

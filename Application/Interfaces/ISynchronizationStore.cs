@@ -27,6 +27,23 @@ public interface ISynchronizationStore
         TimeSpan retryDelay,
         DateTime utcNow,
         CancellationToken cancellationToken);
+
+    Task<SynchronizationFilterListDto?> ListFiltersAsync(int synchronizationId, CancellationToken cancellationToken);
+
+    Task<SynchronizationFilterDto?> CreateFilterAsync(
+        int synchronizationId,
+        SaveSynchronizationFilterRequest request,
+        Guid userId,
+        CancellationToken cancellationToken);
+
+    Task<SynchronizationFilterDto?> UpdateFilterAsync(
+        int synchronizationId,
+        int filterId,
+        SaveSynchronizationFilterRequest request,
+        Guid userId,
+        CancellationToken cancellationToken);
+
+    Task<bool> DeleteFilterAsync(int synchronizationId, int filterId, CancellationToken cancellationToken);
 }
 
 public sealed class ClaimedSynchronization

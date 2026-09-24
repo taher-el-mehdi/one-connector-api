@@ -26,16 +26,13 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 $"""
                 SELECT {SelectColumns}
                 FROM synchronization
-                WHERE company = @company
                 ORDER BY id
                 """,
                 connection);
-            command.Parameters.AddWithValue("@company", company);
             var rows = new List<SynchronizationRecordDto>();
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -56,8 +53,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            return await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false);
         }
         catch (MySqlException ex)
         {
@@ -77,22 +73,21 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            await EnsureMappingAsync(connection, company, values.MappingTableId, cancellationToken).ConfigureAwait(false);
+            await EnsureMappingAsync(connection, values.MappingTableId, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 INSERT INTO synchronization
-                    (company, direction, source, destination, id_mapping_table, code, description, status,
+                    (direction, source, destination, id_mapping_table, code, description, status,
                      max_retries, timeout_seconds, next_run_at, retry_count, created_by, created_at, updated_at, updated_by)
                 VALUES
-                    (@company, @direction, @source, @destination, @mappingTableId, @code, @description, NULL,
+                    (@direction, @source, @destination, @mappingTableId, @code, @description, NULL,
                      @maxRetries, @timeoutSeconds, @nextRunAt, 0, @actor, @now, @now, @actor)
                 """,
                 connection);
-            Bind(command, company, values, actor, now, nextRunAt);
+            Bind(command, values, actor, now, nextRunAt);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             var id = Convert.ToInt32(command.LastInsertedId);
-            return await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false)
+            return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false)
                    ?? throw new SynchronizationStoreException(
                        "The synchronization was saved but could not be read back.",
                        new InvalidOperationException());
@@ -123,13 +118,12 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            if (await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false) is null)
+            if (await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false) is null)
             {
                 return null;
             }
 
-            await EnsureMappingAsync(connection, company, values.MappingTableId, cancellationToken).ConfigureAwait(false);
+            await EnsureMappingAsync(connection, values.MappingTableId, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 UPDATE synchronization
@@ -144,13 +138,13 @@ public sealed class SynchronizationStore : ISynchronizationStore
                     next_run_at = @nextRunAt,
                     updated_at = @now,
                     updated_by = @actor
-                WHERE id = @id AND company = @company
+                WHERE id = @id
                 """,
                 connection);
-            Bind(command, company, values, actor, now, values.NextRunAt);
+            Bind(command, values, actor, now, values.NextRunAt);
             command.Parameters.AddWithValue("@id", id);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            return await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false);
         }
         catch (ArgumentException)
         {
@@ -171,14 +165,146 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
-                "DELETE FROM synchronization WHERE id = @id AND company = @company",
+                "DELETE FROM synchronization WHERE id = @id",
                 connection);
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@company", company);
             var affected = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return affected > 0;
+        }
+        catch (MySqlException ex)
+        {
+            throw new SynchronizationStoreException(ex.Message, ex);
+        }
+    }
+
+    public async Task<SynchronizationFilterListDto?> ListFiltersAsync(int synchronizationId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            if (await ReadAsync(connection, synchronizationId, cancellationToken).ConfigureAwait(false) is null)
+            {
+                return null;
+            }
+
+            return new SynchronizationFilterListDto
+            {
+                Filters = await ReadFiltersAsync(connection, synchronizationId, cancellationToken).ConfigureAwait(false)
+            };
+        }
+        catch (MySqlException ex)
+        {
+            throw new SynchronizationStoreException(ex.Message, ex);
+        }
+    }
+
+    public async Task<SynchronizationFilterDto?> CreateFilterAsync(
+        int synchronizationId,
+        SaveSynchronizationFilterRequest request,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var values = SynchronizationFilterRules.Normalize(request.FieldName, request.Operator, request.Value, request.LogicalOperator);
+        var now = DateTime.UtcNow;
+        var actor = userId.ToString("D");
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            if (await ReadAsync(connection, synchronizationId, cancellationToken).ConfigureAwait(false) is null)
+            {
+                return null;
+            }
+
+            var sortOrder = await NextSortOrderAsync(connection, synchronizationId, cancellationToken).ConfigureAwait(false);
+            await using var command = new MySqlCommand(
+                """
+                INSERT INTO synchronization_filter
+                    (synchronization_id, field_name, operator, value, logical_operator, sort_order,
+                     created_by, created_at, updated_at, updated_by)
+                VALUES
+                    (@synchronizationId, @fieldName, @operator, @value, @logicalOperator, @sortOrder,
+                     @actor, @now, @now, @actor)
+                """,
+                connection);
+            BindFilter(command, synchronizationId, values, sortOrder, actor, now);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            var id = Convert.ToInt32(command.LastInsertedId);
+            return await ReadFilterAsync(connection, synchronizationId, id, cancellationToken).ConfigureAwait(false)
+                   ?? throw new SynchronizationStoreException(
+                       "The filter was saved but could not be read back.",
+                       new InvalidOperationException());
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (MySqlException ex)
+        {
+            throw new SynchronizationStoreException(ex.Message, ex);
+        }
+    }
+
+    public async Task<SynchronizationFilterDto?> UpdateFilterAsync(
+        int synchronizationId,
+        int filterId,
+        SaveSynchronizationFilterRequest request,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var values = SynchronizationFilterRules.Normalize(request.FieldName, request.Operator, request.Value, request.LogicalOperator);
+        var now = DateTime.UtcNow;
+        var actor = userId.ToString("D");
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            var existing = await ReadFilterAsync(connection, synchronizationId, filterId, cancellationToken).ConfigureAwait(false);
+            if (existing is null)
+            {
+                return null;
+            }
+
+            await using var command = new MySqlCommand(
+                """
+                UPDATE synchronization_filter
+                SET field_name = @fieldName,
+                    operator = @operator,
+                    value = @value,
+                    logical_operator = @logicalOperator,
+                    updated_at = @now,
+                    updated_by = @actor
+                WHERE id = @id AND synchronization_id = @synchronizationId
+                """,
+                connection);
+            BindFilter(command, synchronizationId, values, existing.SortOrder, actor, now);
+            command.Parameters.AddWithValue("@id", filterId);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            return await ReadFilterAsync(connection, synchronizationId, filterId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (MySqlException ex)
+        {
+            throw new SynchronizationStoreException(ex.Message, ex);
+        }
+    }
+
+    public async Task<bool> DeleteFilterAsync(int synchronizationId, int filterId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = new MySqlCommand(
+                """
+                DELETE FROM synchronization_filter
+                WHERE id = @id AND synchronization_id = @synchronizationId
+                """,
+                connection);
+            command.Parameters.AddWithValue("@id", filterId);
+            command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+            return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
         }
         catch (MySqlException ex)
         {
@@ -192,7 +318,6 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 UPDATE synchronization
@@ -200,20 +325,19 @@ public sealed class SynchronizationStore : ISynchronizationStore
                     retry_count = 0,
                     updated_at = @now,
                     updated_by = @actor
-                WHERE id = @id AND company = @company
+                WHERE id = @id
                 """,
                 connection);
             command.Parameters.AddWithValue("@now", now);
             command.Parameters.AddWithValue("@actor", userId.ToString("D"));
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@company", company);
             var affected = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (affected == 0)
             {
                 return null;
             }
 
-            return await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false);
         }
         catch (MySqlException ex)
         {
@@ -226,18 +350,15 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 SELECT id
                 FROM synchronization
-                WHERE company = @company
-                  AND next_run_at IS NOT NULL
+                WHERE next_run_at IS NOT NULL
                   AND next_run_at <= @now
                 ORDER BY next_run_at, id
                 """,
                 connection);
-            command.Parameters.AddWithValue("@company", company);
             command.Parameters.AddWithValue("@now", utcNow);
             var ids = new List<int>();
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -259,28 +380,25 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 UPDATE synchronization
                 SET next_run_at = DATE_ADD(@now, INTERVAL (timeout_seconds + 60) SECOND),
                     updated_at = @now
                 WHERE id = @id
-                  AND company = @company
                   AND next_run_at IS NOT NULL
                   AND next_run_at <= @now
                 """,
                 connection);
             command.Parameters.AddWithValue("@now", utcNow);
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@company", company);
             var affected = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (affected == 0)
             {
                 return null;
             }
 
-            var row = await ReadAsync(connection, company, id, cancellationToken).ConfigureAwait(false);
+            var row = await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false);
             if (row is null)
             {
                 return null;
@@ -312,9 +430,8 @@ public sealed class SynchronizationStore : ISynchronizationStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            var current = await ReadQueueStateAsync(connection, transaction, company, id, cancellationToken).ConfigureAwait(false);
+            var current = await ReadQueueStateAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
             if (current is null)
             {
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -349,7 +466,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
                     retry_count = @retryCount,
                     next_run_at = @nextRunAt,
                     updated_at = @now
-                WHERE id = @id AND company = @company
+                WHERE id = @id
                 """,
                 connection,
                 transaction);
@@ -358,7 +475,6 @@ public sealed class SynchronizationStore : ISynchronizationStore
             command.Parameters.AddWithValue("@nextRunAt", (object?)nextRunAt ?? DBNull.Value);
             command.Parameters.AddWithValue("@now", utcNow);
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@company", company);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -382,7 +498,6 @@ public sealed class SynchronizationStore : ISynchronizationStore
 
     private static async Task<SynchronizationRecordDto?> ReadAsync(
         MySqlConnection connection,
-        string company,
         int id,
         CancellationToken cancellationToken)
     {
@@ -390,11 +505,10 @@ public sealed class SynchronizationStore : ISynchronizationStore
             $"""
             SELECT {SelectColumns}
             FROM synchronization
-            WHERE id = @id AND company = @company
+            WHERE id = @id
             """,
             connection);
         command.Parameters.AddWithValue("@id", id);
-        command.Parameters.AddWithValue("@company", company);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -407,7 +521,6 @@ public sealed class SynchronizationStore : ISynchronizationStore
     private static async Task<QueueState?> ReadQueueStateAsync(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string company,
         int id,
         CancellationToken cancellationToken)
     {
@@ -415,13 +528,12 @@ public sealed class SynchronizationStore : ISynchronizationStore
             """
             SELECT max_retries, retry_count, next_run_at
             FROM synchronization
-            WHERE id = @id AND company = @company
+            WHERE id = @id
             FOR UPDATE
             """,
             connection,
             transaction);
         command.Parameters.AddWithValue("@id", id);
-        command.Parameters.AddWithValue("@company", company);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -453,9 +565,99 @@ public sealed class SynchronizationStore : ISynchronizationStore
             UpdatedAt = ToOffset(ReadUtc(reader, "updated_at"))
         };
 
+    private static async Task<IReadOnlyList<SynchronizationFilterDto>> ReadFiltersAsync(
+        MySqlConnection connection,
+        int synchronizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new MySqlCommand(
+            """
+            SELECT id, synchronization_id, field_name, operator, value, logical_operator, sort_order, created_at, updated_at
+            FROM synchronization_filter
+            WHERE synchronization_id = @synchronizationId
+            ORDER BY sort_order, id
+            """,
+            connection);
+        command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+        var rows = new List<SynchronizationFilterDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(ReadFilter(reader));
+        }
+
+        return rows;
+    }
+
+    private static async Task<SynchronizationFilterDto?> ReadFilterAsync(
+        MySqlConnection connection,
+        int synchronizationId,
+        int filterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new MySqlCommand(
+            """
+            SELECT id, synchronization_id, field_name, operator, value, logical_operator, sort_order, created_at, updated_at
+            FROM synchronization_filter
+            WHERE id = @id AND synchronization_id = @synchronizationId
+            """,
+            connection);
+        command.Parameters.AddWithValue("@id", filterId);
+        command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadFilter(reader) : null;
+    }
+
+    private static async Task<int> NextSortOrderAsync(
+        MySqlConnection connection,
+        int synchronizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new MySqlCommand(
+            """
+            SELECT COALESCE(MAX(sort_order), -1) + 1
+            FROM synchronization_filter
+            WHERE synchronization_id = @synchronizationId
+            """,
+            connection);
+        command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    private static SynchronizationFilterDto ReadFilter(MySqlDataReader reader) =>
+        new()
+        {
+            Id = reader.GetInt32("id"),
+            SynchronizationId = reader.GetInt32("synchronization_id"),
+            FieldName = reader.GetString("field_name"),
+            Operator = reader.GetString("operator"),
+            Value = reader.IsDBNull(reader.GetOrdinal("value")) ? null : reader.GetString("value"),
+            LogicalOperator = reader.GetString("logical_operator"),
+            SortOrder = reader.GetInt32("sort_order"),
+            CreatedAt = ToOffset(ReadUtc(reader, "created_at")),
+            UpdatedAt = ToOffset(ReadUtc(reader, "updated_at"))
+        };
+
+    private static void BindFilter(
+        MySqlCommand command,
+        int synchronizationId,
+        NormalizedSynchronizationFilter values,
+        int sortOrder,
+        string actor,
+        DateTime now)
+    {
+        command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+        command.Parameters.AddWithValue("@fieldName", values.FieldName);
+        command.Parameters.AddWithValue("@operator", values.Operator);
+        command.Parameters.AddWithValue("@value", (object?)values.Value ?? DBNull.Value);
+        command.Parameters.AddWithValue("@logicalOperator", values.LogicalOperator);
+        command.Parameters.AddWithValue("@sortOrder", sortOrder);
+        command.Parameters.AddWithValue("@actor", actor);
+        command.Parameters.AddWithValue("@now", now);
+    }
+
     private static async Task EnsureMappingAsync(
         MySqlConnection connection,
-        string company,
         int mappingTableId,
         CancellationToken cancellationToken)
     {
@@ -463,27 +665,24 @@ public sealed class SynchronizationStore : ISynchronizationStore
             """
             SELECT COUNT(*)
             FROM mapping_table
-            WHERE id = @id AND company = @company
+            WHERE id = @id
             """,
             connection);
         command.Parameters.AddWithValue("@id", mappingTableId);
-        command.Parameters.AddWithValue("@company", company);
         var count = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
         if (count == 0)
         {
-            throw new ArgumentException("Choose a mapping for this company.");
+            throw new ArgumentException("Choose a mapping.");
         }
     }
 
     private static void Bind(
         MySqlCommand command,
-        string company,
         NormalizedSynchronization values,
         string actor,
         DateTime now,
         DateTime? nextRunAt)
     {
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@direction", values.Direction);
         command.Parameters.AddWithValue("@source", values.Source);
         command.Parameters.AddWithValue("@destination", values.Destination);

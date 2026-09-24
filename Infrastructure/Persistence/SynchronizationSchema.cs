@@ -29,7 +29,7 @@ internal static class SynchronizationSchema
         else if (RowsMissingUniqueMapping(connection))
         {
             throw new InvalidOperationException(
-                "The synchronization table already has rows whose company does not have exactly one mapping. Give each of those companies one mapping, or remove the rows, then start the API again.");
+                "The synchronization table already has rows and mapping_table does not contain exactly one mapping. Leave one mapping, or remove the synchronization rows, then start the API again.");
         }
         else
         {
@@ -39,11 +39,10 @@ internal static class SynchronizationSchema
                 """
                 UPDATE synchronization AS sync
                 INNER JOIN (
-                    SELECT company, MIN(id) AS mapping_id
+                    SELECT MIN(id) AS mapping_id
                     FROM mapping_table
-                    GROUP BY company
                     HAVING COUNT(*) = 1
-                ) AS only_mapping ON only_mapping.company = sync.company
+                ) AS only_mapping
                 SET sync.id_mapping_table = only_mapping.mapping_id
                 """);
             if (Count(connection, "SELECT COUNT(*) FROM synchronization WHERE id_mapping_table IS NULL") > 0)
@@ -114,16 +113,19 @@ internal static class SynchronizationSchema
             Execute(connection, "ALTER TABLE synchronization ADD COLUMN retry_count INT NOT NULL DEFAULT 0");
         }
 
-        if (!IndexExists(connection, "uq_synchronization_company_code"))
+        if (IndexExists(connection, "uq_synchronization_company_code"))
         {
-            Execute(
-                connection,
-                "ALTER TABLE synchronization ADD UNIQUE KEY uq_synchronization_company_code (company, code)");
+            Execute(connection, "ALTER TABLE synchronization DROP INDEX uq_synchronization_company_code");
+        }
+
+        if (!IndexExists(connection, "uq_synchronization_code"))
+        {
+            Execute(connection, "ALTER TABLE synchronization ADD UNIQUE KEY uq_synchronization_code (code)");
         }
 
         if (!IndexExists(connection, "ix_synchronization_due"))
         {
-            Execute(connection, "ALTER TABLE synchronization ADD KEY ix_synchronization_due (company, next_run_at)");
+            Execute(connection, "ALTER TABLE synchronization ADD KEY ix_synchronization_due (next_run_at)");
         }
 
         if (!ConstraintExists(connection, "chk_synchronization_status"))
@@ -148,13 +150,7 @@ internal static class SynchronizationSchema
         return Count(
             connection,
             """
-            SELECT COUNT(*)
-            FROM synchronization AS sync
-            WHERE (
-                SELECT COUNT(*)
-                FROM mapping_table
-                WHERE company = sync.company
-            ) <> 1
+            SELECT CASE WHEN (SELECT COUNT(*) FROM mapping_table) = 1 THEN 0 ELSE 1 END
             """) > 0;
     }
 

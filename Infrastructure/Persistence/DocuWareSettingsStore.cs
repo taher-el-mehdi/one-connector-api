@@ -138,16 +138,15 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
         {
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await RequireCompanyAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 foreach (var (key, value) in updates)
                 {
-                    await UpsertAsync(connection, transaction, company, key, value, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
+                    await UpsertAsync(connection, transaction, key, value, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
                 }
 
-                await StampAsync(connection, transaction, company, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
+                await StampAsync(connection, transaction, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch
@@ -185,11 +184,14 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
         var flags = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var company = await RequireCompanyAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = new MySqlCommand(
-            "SELECT `key`, `required` FROM setting_docuware WHERE company = @company",
+            """
+            SELECT `key`, `required` FROM setting
+            WHERE type = @type AND code = @code
+            """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
+        command.Parameters.AddWithValue("@type", SettingTable.DocuWare);
+        command.Parameters.AddWithValue("@code", SettingTable.DocuWare);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -218,20 +220,20 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
         {
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            var company = await RequireCompanyAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
-                UPDATE setting_docuware
+                UPDATE setting
                 SET status = @status,
                     updated_at = @now,
                     updated_by = @actor
-                WHERE company = @company
+                WHERE type = @type AND code = @code
                 """,
                 connection);
             command.Parameters.AddWithValue("@status", status ? 1 : 0);
             command.Parameters.AddWithValue("@now", now);
             command.Parameters.AddWithValue("@actor", actor);
-            command.Parameters.AddWithValue("@company", company);
+            command.Parameters.AddWithValue("@type", SettingTable.DocuWare);
+            command.Parameters.AddWithValue("@code", SettingTable.DocuWare);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             _options.Status = status;
         }
@@ -239,35 +241,6 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
         {
             _gate.Release();
         }
-    }
-
-    private static async Task<string> RequireCompanyAsync(MySqlConnection connection, CancellationToken cancellationToken)
-    {
-        await using (var named = new MySqlCommand(
-            "SELECT name FROM company WHERE name = @name LIMIT 1",
-            connection))
-        {
-            named.Parameters.AddWithValue("@name", ConnectorCompany.Name);
-            var value = await named.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            if (value is not null and not DBNull)
-            {
-                var company = Convert.ToString(value);
-                if (!string.IsNullOrEmpty(company))
-                {
-                    return company;
-                }
-            }
-        }
-
-        await using var any = new MySqlCommand("SELECT name FROM company ORDER BY name LIMIT 1", connection);
-        var fallback = await any.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        var name = fallback is null or DBNull ? null : Convert.ToString(fallback);
-        if (string.IsNullOrEmpty(name))
-        {
-            throw new InvalidOperationException("The connector store has no company.");
-        }
-
-        return name;
     }
 
     private static bool Flag(Dictionary<string, bool> flags, string key) =>
@@ -282,7 +255,6 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
     private static async Task UpsertAsync(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string company,
         string key,
         string? value,
         string actor,
@@ -293,17 +265,18 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
     {
         await using var update = new MySqlCommand(
             """
-            UPDATE setting_docuware
+            UPDATE setting
             SET `value` = @value,
                 updated_at = @now,
                 updated_by = @actor,
                 configured = @configured,
                 status = @status
-            WHERE company = @company AND `key` = @key
+            WHERE type = @type AND code = @code AND `key` = @key
             """,
             connection,
             transaction);
-        update.Parameters.AddWithValue("@company", company);
+        update.Parameters.AddWithValue("@type", SettingTable.DocuWare);
+        update.Parameters.AddWithValue("@code", SettingTable.DocuWare);
         update.Parameters.AddWithValue("@key", key);
         update.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
         update.Parameters.AddWithValue("@now", now);
@@ -317,14 +290,16 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
 
         await using var insert = new MySqlCommand(
             """
-            INSERT INTO setting_docuware
-                (company, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
+            INSERT INTO setting
+                (type, code, description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
             VALUES
-                (@company, @key, @value, @actor, @now, @now, @actor, @configured, @status, 1)
+                (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @configured, @status, 1)
             """,
             connection,
             transaction);
-        insert.Parameters.AddWithValue("@company", company);
+        insert.Parameters.AddWithValue("@type", SettingTable.DocuWare);
+        insert.Parameters.AddWithValue("@code", SettingTable.DocuWare);
+        insert.Parameters.AddWithValue("@description", "DocuWare");
         insert.Parameters.AddWithValue("@key", key);
         insert.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
         insert.Parameters.AddWithValue("@actor", actor);
@@ -337,7 +312,6 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
     private static async Task StampAsync(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string company,
         string actor,
         DateTime now,
         bool configured,
@@ -346,12 +320,12 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
     {
         await using var command = new MySqlCommand(
             """
-            UPDATE setting_docuware
+            UPDATE setting
             SET configured = @configured,
                 status = @status,
                 updated_at = @now,
                 updated_by = @actor
-            WHERE company = @company
+            WHERE type = @type AND code = @code
             """,
             connection,
             transaction);
@@ -359,7 +333,8 @@ public sealed class DocuWareSettingsStore : IDocuWareSettingsStore
         command.Parameters.AddWithValue("@status", status ? 1 : 0);
         command.Parameters.AddWithValue("@now", now);
         command.Parameters.AddWithValue("@actor", actor);
-        command.Parameters.AddWithValue("@company", company);
+        command.Parameters.AddWithValue("@type", SettingTable.DocuWare);
+        command.Parameters.AddWithValue("@code", SettingTable.DocuWare);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }

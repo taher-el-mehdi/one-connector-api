@@ -16,25 +16,4 @@ GET {{baseUrl}}/api/sync/status
 GET {{baseUrl}}/api/sync/errors
 
 ###
-GET {{baseUrl}}/api/suppliers
-
-###
-GET {{baseUrl}}/api/accounts
-
-###
-GET {{baseUrl}}/api/sections
-
-###
-POST {{baseUrl}}/api/sync/run
-
-###
-POST {{baseUrl}}/api/sync/supplier/BILLO
-
-###
-POST {{baseUrl}}/api/sync/account/40100000
-
-###
-POST {{baseUrl}}/api/sync/section/ADM
-
-###
-POST {{baseUrl}}/api/sync/document/51?entityType=Supplier
+POST {{baseUrl}}/api/synchronizations/1/run

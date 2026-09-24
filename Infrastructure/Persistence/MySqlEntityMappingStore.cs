@@ -25,11 +25,10 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return new EntityMappingListDto();
             }
 
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             return new EntityMappingListDto
             {
                 SchemaReady = true,
-                Mappings = await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false)
+                Mappings = await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false)
             };
         }
         catch (MySqlException ex)
@@ -48,8 +47,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return null;
             }
 
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            return (await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false))
+            return (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(mapping => mapping.Id == id);
         }
         catch (MySqlException ex)
@@ -70,20 +68,19 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await RequireSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            await EnsurePairAvailableAsync(connection, company, pair, exceptId: null, cancellationToken).ConfigureAwait(false);
+            await EnsurePairAvailableAsync(connection, pair, exceptId: null, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 INSERT INTO mapping_table
-                    (company, entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
+                    (entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
                 VALUES
-                    (@company, @entityName, @cabinetName, @actor, @now, @now, @actor)
+                    (@entityName, @cabinetName, @actor, @now, @now, @actor)
                 """,
                 connection);
-            BindPair(command, company, pair, actor, now);
+            BindPair(command, pair, actor, now);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             var id = Convert.ToInt32(command.LastInsertedId);
-            return (await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false))
+            return (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                        .FirstOrDefault(mapping => mapping.Id == id)
                    ?? throw new MappingStoreException("The mapping was saved but could not be read back.", new InvalidOperationException());
         }
@@ -114,13 +111,12 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await RequireSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            if ((await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false)).All(mapping => mapping.Id != id))
+            if ((await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false)).All(mapping => mapping.Id != id))
             {
                 return null;
             }
 
-            await EnsurePairAvailableAsync(connection, company, pair, id, cancellationToken).ConfigureAwait(false);
+            await EnsurePairAvailableAsync(connection, pair, id, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 UPDATE mapping_table
@@ -128,10 +124,10 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                     cabinet_name = @cabinetName,
                     updated_at = @now,
                     updated_by = @actor
-                WHERE id = @id AND company = @company
+                WHERE id = @id
                 """,
                 connection);
-            BindPair(command, company, pair, actor, now);
+            BindPair(command, pair, actor, now);
             command.Parameters.AddWithValue("@id", id);
             var updated = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (updated == 0)
@@ -139,7 +135,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return null;
             }
 
-            return (await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false))
+            return (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(mapping => mapping.Id == id);
         }
         catch (MappingConflictException)
@@ -166,12 +162,10 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return false;
             }
 
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
-                "DELETE FROM mapping_table WHERE id = @id AND company = @company",
+                "DELETE FROM mapping_table WHERE id = @id",
                 connection);
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@company", company);
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
         }
         catch (MySqlException ex)
@@ -199,28 +193,27 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await RequireSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
-            if ((await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false)).All(mapping => mapping.Id != mappingId))
+            if ((await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false)).All(mapping => mapping.Id != mappingId))
             {
                 return null;
             }
 
-            await EnsureFieldAvailableAsync(connection, company, mappingId, field.EntityFieldName, exceptId: null, cancellationToken)
+            await EnsureFieldAvailableAsync(connection, mappingId, field.EntityFieldName, exceptId: null, cancellationToken)
                 .ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 INSERT INTO mapping_field
-                    (company, id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
+                    (id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
                      entity_type_long, cabinet_type_long, created_by, created_at, updated_at, updated_by)
                 VALUES
-                    (@company, @mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
+                    (@mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
                      @entityTypeLong, @cabinetTypeLong, @actor, @now, @now, @actor)
                 """,
                 connection);
-            BindField(command, company, mappingId, field, actor, now);
+            BindField(command, mappingId, field, actor, now);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             var id = Convert.ToInt32(command.LastInsertedId);
-            var mapping = (await ReadAllAsync(connection, company, cancellationToken).ConfigureAwait(false))
+            var mapping = (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(item => item.Id == mappingId);
             return mapping?.Fields.FirstOrDefault(item => item.Id == id);
         }
@@ -248,16 +241,14 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return false;
             }
 
-            var company = await ConnectorCompany.RequireAsync(connection, cancellationToken).ConfigureAwait(false);
             await using var command = new MySqlCommand(
                 """
                 DELETE FROM mapping_field
-                WHERE id = @id AND id_mapping_table = @mappingId AND company = @company
+                WHERE id = @id AND id_mapping_table = @mappingId
                 """,
                 connection);
             command.Parameters.AddWithValue("@id", fieldId);
             command.Parameters.AddWithValue("@mappingId", mappingId);
-            command.Parameters.AddWithValue("@company", company);
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
         }
         catch (MySqlException ex)
@@ -298,7 +289,6 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
 
     private static async Task<IReadOnlyList<EntityMappingDto>> ReadAllAsync(
         MySqlConnection connection,
-        string company,
         CancellationToken cancellationToken)
     {
         var mappings = new List<EntityMappingDto>();
@@ -307,17 +297,14 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             """
             SELECT id, entity_name, cabinet_name
             FROM mapping_table
-            WHERE company = @company
             ORDER BY entity_name, cabinet_name, id;
 
             SELECT id, id_mapping_table, entity_field_name, cabinet_field_name,
                    entity_type_name, cabinet_type_name, entity_type_long, cabinet_type_long
             FROM mapping_field
-            WHERE company = @company
             ORDER BY id_mapping_table, entity_field_name, id
             """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -358,7 +345,6 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
 
     private static async Task EnsurePairAvailableAsync(
         MySqlConnection connection,
-        string company,
         NormalizedMapping pair,
         int? exceptId,
         CancellationToken cancellationToken)
@@ -367,14 +353,12 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             """
             SELECT id
             FROM mapping_table
-            WHERE company = @company
-              AND entity_name = @entityName
+            WHERE entity_name = @entityName
               AND cabinet_name = @cabinetName
               AND (@exceptId IS NULL OR id <> @exceptId)
             LIMIT 1
             """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@entityName", pair.EntityName);
         command.Parameters.AddWithValue("@cabinetName", pair.CabinetName);
         command.Parameters.AddWithValue("@exceptId", exceptId.HasValue ? exceptId.Value : DBNull.Value);
@@ -387,7 +371,6 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
 
     private static async Task EnsureFieldAvailableAsync(
         MySqlConnection connection,
-        string company,
         int mappingId,
         string entityFieldName,
         int? exceptId,
@@ -397,14 +380,12 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             """
             SELECT id
             FROM mapping_field
-            WHERE company = @company
-              AND id_mapping_table = @mappingId
+            WHERE id_mapping_table = @mappingId
               AND entity_field_name = @entityFieldName
               AND (@exceptId IS NULL OR id <> @exceptId)
             LIMIT 1
             """,
             connection);
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@mappingId", mappingId);
         command.Parameters.AddWithValue("@entityFieldName", entityFieldName);
         command.Parameters.AddWithValue("@exceptId", exceptId.HasValue ? exceptId.Value : DBNull.Value);
@@ -415,9 +396,8 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         }
     }
 
-    private static void BindPair(MySqlCommand command, string company, NormalizedMapping pair, string actor, DateTime now)
+    private static void BindPair(MySqlCommand command, NormalizedMapping pair, string actor, DateTime now)
     {
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@entityName", pair.EntityName);
         command.Parameters.AddWithValue("@cabinetName", pair.CabinetName);
         command.Parameters.AddWithValue("@actor", actor);
@@ -426,13 +406,11 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
 
     private static void BindField(
         MySqlCommand command,
-        string company,
         int mappingId,
         NormalizedMappingField field,
         string actor,
         DateTime now)
     {
-        command.Parameters.AddWithValue("@company", company);
         command.Parameters.AddWithValue("@mappingId", mappingId);
         command.Parameters.AddWithValue("@entityFieldName", field.EntityFieldName);
         command.Parameters.AddWithValue("@cabinetFieldName", field.CabinetFieldName);

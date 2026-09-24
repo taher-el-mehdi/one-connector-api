@@ -81,6 +81,7 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                     SageNumber = key,
                     DocuWareDocumentId = document.Id
                 };
+            tracking.BindSynchronization(request.SynchronizationId);
 
             tracking.DocuWareDocumentId = document.Id;
             tracking.Status = SyncStatus.Processing;
@@ -106,8 +107,9 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                     await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
                     skipped++;
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         key,
                         document.Id);
@@ -119,7 +121,7 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                     if (!_options.ApplySageWrites)
                     {
                         tracking.Status = SyncStatus.Skipped;
-                        tracking.LastError = "ApplySageWrites is disabled";
+                        tracking.ErrorMessage = "ApplySageWrites is disabled";
                         tracking.UpdatedAt = DateTimeOffset.UtcNow;
                         await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
                         skipped++;
@@ -137,13 +139,14 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                     tracking.Status = SyncStatus.Completed;
                     tracking.Fingerprint = fingerprint;
                     tracking.LastSuccessAt = DateTimeOffset.UtcNow;
-                    tracking.LastError = null;
+                    tracking.ErrorMessage = null;
                     tracking.RetryCount = 0;
                     updated++;
                     messages.Add($"UPDATE {key}");
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Update",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Update",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         key,
                         document.Id);
@@ -164,13 +167,14 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                     tracking.Status = SyncStatus.Completed;
                     tracking.Fingerprint = fingerprint;
                     tracking.LastSuccessAt = DateTimeOffset.UtcNow;
-                    tracking.LastError = null;
+                    tracking.ErrorMessage = null;
                     tracking.RetryCount = 0;
                     created++;
                     messages.Add($"INSERT {key}");
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Insert",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Insert",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         key,
                         document.Id);
@@ -178,13 +182,14 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                 else
                 {
                     tracking.Status = SyncStatus.Skipped;
-                    tracking.LastError = "Missing in Sage";
+                    tracking.ErrorMessage = "Missing in Sage";
                     tracking.UpdatedAt = DateTimeOffset.UtcNow;
                     skipped++;
                     messages.Add($"SKIP {key}: absent from Sage");
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped Reason=MissingInSage",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped Reason=MissingInSage",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         key,
                         document.Id);
@@ -203,14 +208,15 @@ public sealed class DocuWareToSageSyncUseCase : IDocuWareToSageSyncUseCase
                 }
 
                 tracking.Status = SyncStatus.Failed;
-                tracking.LastError = message;
+                tracking.ErrorMessage = message;
                 tracking.RetryCount++;
                 tracking.UpdatedAt = DateTimeOffset.UtcNow;
                 await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
                 _logger.LogError(
                     ex,
-                    "SyncId={SyncId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Failed Permanent={Permanent}",
+                    "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=DocuWareToSage Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Failed Permanent={Permanent}",
                     syncId,
+                    request.SynchronizationId,
                     entityType,
                     key,
                     document.Id,

@@ -14,7 +14,7 @@ internal static class ConnectorStoreReshape
             return;
         }
 
-        if (TableExists(connection, "docuware_settings") && Count(connection, "setting_docuware") == 0)
+        if (TableExists(connection, "docuware_settings") && Count(connection, SettingTable.Name) == 0)
         {
             CopySettings(connection);
         }
@@ -131,24 +131,9 @@ internal static class ConnectorStoreReshape
         using var transaction = connection.BeginTransaction();
         try
         {
-            using (var company = new MySqlCommand(
-                """
-                INSERT INTO company (name, label, plan)
-                SELECT @name, @label, @plan
-                WHERE NOT EXISTS (SELECT 1 FROM company WHERE name = @name)
-                """,
-                connection,
-                transaction))
-            {
-                company.Parameters.AddWithValue("@name", ConnectorCompany.Name);
-                company.Parameters.AddWithValue("@label", ConnectorCompany.Label);
-                company.Parameters.AddWithValue("@plan", ConnectorCompany.Plan);
-                company.ExecuteNonQuery();
-            }
-
-            InsertAll(connection, transaction, "setting_docuware", docuWare);
-            InsertAll(connection, transaction, "setting_erp", erp);
-            InsertAll(connection, transaction, "setting_synchronization", sync);
+            InsertAll(connection, transaction, SettingTable.DocuWare, "DocuWare", docuWare);
+            InsertAll(connection, transaction, SettingTable.Sage, "Sage", erp);
+            InsertAll(connection, transaction, SettingTable.Synchronization, "Synchronization", sync);
             transaction.Commit();
         }
         catch
@@ -207,16 +192,22 @@ internal static class ConnectorStoreReshape
     private static void InsertAll(
         MySqlConnection connection,
         MySqlTransaction transaction,
-        string table,
+        string type,
+        string description,
         Dictionary<string, string?> values)
     {
         foreach (var (key, value) in values)
         {
             using var command = new MySqlCommand(
-                $"INSERT INTO {table} (company, `key`, `value`) VALUES (@company, @key, @value)",
+                """
+                INSERT INTO setting (type, code, description, `key`, `value`)
+                VALUES (@type, @code, @description, @key, @value)
+                """,
                 connection,
                 transaction);
-            command.Parameters.AddWithValue("@company", ConnectorCompany.Name);
+            command.Parameters.AddWithValue("@type", type);
+            command.Parameters.AddWithValue("@code", type);
+            command.Parameters.AddWithValue("@description", description);
             command.Parameters.AddWithValue("@key", key);
             command.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
             command.ExecuteNonQuery();

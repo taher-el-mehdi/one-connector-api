@@ -19,8 +19,11 @@ internal static class ConnectorStoreBootstrap
             using var connection = new MySqlConnection(connectionString);
             connection.Open();
             ApplySchema(connection, contentRoot);
+            CompanySchema.Remove(connection);
             MappingFieldSchema.Ensure(connection);
             SynchronizationSchema.Ensure(connection);
+            LogsSchema.Ensure(connection);
+            SettingSchema.MigrateLegacy(connection);
             ConnectorStoreReshape.Apply(connection);
             ConnectorStoreSeeder.EnsureSeeded(connection, secretsKey, contentRoot);
             DocuWareSettingsSchema.Ensure(connection);

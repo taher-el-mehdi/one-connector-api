@@ -117,3 +117,76 @@ public sealed record NormalizedSynchronization(
     int MaxRetries,
     int TimeoutSeconds,
     DateTime? NextRunAt);
+
+public static class SynchronizationFilterRules
+{
+    public const int FieldNameMaxLength = 128;
+    public const int ValueMaxLength = 512;
+
+    public static readonly string[] Operators =
+    [
+        "equals",
+        "not_equals",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "is_null",
+        "not_null"
+    ];
+
+    public static NormalizedSynchronizationFilter Normalize(
+        string? fieldName,
+        string? operatorName,
+        string? value,
+        string? logicalOperator)
+    {
+        var field = fieldName?.Trim() ?? string.Empty;
+        if (field.Length == 0)
+        {
+            throw new ArgumentException("Enter a field name.");
+        }
+
+        if (field.Length > FieldNameMaxLength)
+        {
+            throw new ArgumentException($"Field name must be {FieldNameMaxLength} characters or fewer.");
+        }
+
+        var op = operatorName?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (!Operators.Contains(op, StringComparer.Ordinal))
+        {
+            throw new ArgumentException("Choose an operator.");
+        }
+
+        var logical = string.IsNullOrWhiteSpace(logicalOperator) ? "AND" : logicalOperator.Trim().ToUpperInvariant();
+        if (logical is not ("AND" or "OR"))
+        {
+            throw new ArgumentException("Logical operator must be AND or OR.");
+        }
+
+        string? normalizedValue = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        if (op is "is_null" or "not_null")
+        {
+            normalizedValue = null;
+        }
+        else if (normalizedValue is null)
+        {
+            throw new ArgumentException("Enter a value.");
+        }
+        else if (normalizedValue.Length > ValueMaxLength)
+        {
+            throw new ArgumentException($"Value must be {ValueMaxLength} characters or fewer.");
+        }
+
+        return new NormalizedSynchronizationFilter(field, op, normalizedValue, logical);
+    }
+}
+
+public sealed record NormalizedSynchronizationFilter(
+    string FieldName,
+    string Operator,
+    string? Value,
+    string LogicalOperator);

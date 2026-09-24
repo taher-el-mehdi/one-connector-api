@@ -22,15 +22,14 @@ Synchronization, cabinet resolution, fingerprints, retries, and SQL stay in the 
 
 | Route | Screen | API |
 |---|---|---|
-| `/` | Product landing | None |
-| `/login` | Operator sign-in | None. Session stays in the browser |
+| `/` | Operator sign-in | None. Session stays in the browser |
+| `/login` | Operator sign-in | Same as `/` |
 | `/app` | Overview | `GET /api/health`, `GET /api/sync/status`, `GET /api/configuration` |
 | `/app/synchronization` | Both directions and queue controls | status, configuration, `POST /api/sync/run`, per-record posts |
 | `/app/entities` | Sage tables | `GET /api/entities/tables` |
 | `/app/entities/table/:schema/:name` | One Sage table and its columns | `GET /api/entities/tables/{schema}/{name}` |
 | `/app/cabinets` | DocuWare file cabinets | `GET /api/cabinets` |
 | `/app/cabinets/:id` | One cabinet and its index fields | `GET /api/cabinets/{id}` |
-| `/app/entities/suppliers`, `/app/entities/accounts`, `/app/entities/sections` | Sage rows and one-record queue | entity GETs and the matching POST |
 | `/app/configuration` | Read-only non-secret settings | `GET /api/configuration` |
 | `/app/system` | Connection tests and about | `GET /api/health`, `/api/health/docuware`, `/api/health/sage` |
 

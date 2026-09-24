@@ -79,35 +79,6 @@ public sealed class ComponentHealth
     public string? Detail { get; init; }
 }
 
-public sealed class SupplierDto
-{
-    public required string Number { get; init; }
-
-    public string? Title { get; init; }
-
-    public object? Type { get; init; }
-
-    public string? City { get; init; }
-
-    public string? Email { get; init; }
-}
-
-public sealed class ChartOfAccountsDto
-{
-    public required string Number { get; init; }
-
-    public string? Title { get; init; }
-
-    public object? Nature { get; init; }
-}
-
-public sealed class AnalyticSectionDto
-{
-    public required string Code { get; init; }
-
-    public string? Description { get; init; }
-}
-
 public sealed class SyncStatusResponse
 {
     public required bool WorkerEnabled { get; init; }
@@ -170,6 +141,54 @@ public sealed class PublicConfigurationResponse
     public required PublicSynchronizationConfiguration Synchronization { get; init; }
 
     public required PublicTrackingConfiguration Tracking { get; init; }
+
+    public IReadOnlyList<ConfigurationEntry> Entries { get; init; } = [];
+}
+
+public sealed class ConfigurationEntry
+{
+    public required string Type { get; init; }
+
+    public required string Code { get; init; }
+
+    public string? Description { get; init; }
+
+    public required bool Status { get; init; }
+}
+
+public sealed class CreateConfigurationRequest
+{
+    public string Type { get; init; } = string.Empty;
+
+    public string Code { get; init; } = string.Empty;
+
+    public string Description { get; init; } = string.Empty;
+}
+
+public sealed class ConfigurationSettingRow
+{
+    public string Type { get; init; } = string.Empty;
+
+    public string Code { get; init; } = string.Empty;
+
+    public string? Description { get; init; }
+
+    public string Key { get; init; } = string.Empty;
+
+    public string? Value { get; init; }
+
+    public bool Configured { get; init; }
+
+    public bool Status { get; init; }
+
+    public bool Required { get; init; } = true;
+}
+
+public sealed class ImportConfigurationResult
+{
+    public int Added { get; init; }
+
+    public int Updated { get; init; }
 }
 
 public sealed class PublicDocuWareConfiguration
@@ -486,13 +505,7 @@ public sealed class SyncTrackingRecordDto
 {
     public required Guid Id { get; init; }
 
-    public required string Direction { get; init; }
-
-    public required string EntityType { get; init; }
-
-    public string? SageNumber { get; init; }
-
-    public int? DocuWareDocumentId { get; init; }
+    public int? SynchronizationId { get; init; }
 
     public required string Status { get; init; }
 
@@ -506,7 +519,9 @@ public sealed class SyncTrackingRecordDto
 
     public int RetryCount { get; init; }
 
-    public string? LastError { get; init; }
+    public string? ErrorMessage { get; init; }
+
+    public object? File { get; init; }
 }
 
 public sealed class EntityMappingListDto
@@ -587,6 +602,43 @@ public sealed class SynchronizationRecordDto
     public DateTimeOffset CreatedAt { get; init; }
 
     public DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed class SynchronizationFilterListDto
+{
+    public IReadOnlyList<SynchronizationFilterDto> Filters { get; init; } = [];
+}
+
+public sealed class SynchronizationFilterDto
+{
+    public int Id { get; init; }
+
+    public int SynchronizationId { get; init; }
+
+    public required string FieldName { get; init; }
+
+    public required string Operator { get; init; }
+
+    public string? Value { get; init; }
+
+    public required string LogicalOperator { get; init; }
+
+    public int SortOrder { get; init; }
+
+    public DateTimeOffset CreatedAt { get; init; }
+
+    public DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed class SaveSynchronizationFilterRequest
+{
+    public string? FieldName { get; init; }
+
+    public string? Operator { get; init; }
+
+    public string? Value { get; init; }
+
+    public string? LogicalOperator { get; init; }
 }
 
 public sealed class SaveSynchronizationRequest

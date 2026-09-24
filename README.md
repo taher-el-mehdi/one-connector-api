@@ -23,7 +23,7 @@ cd docuware_sage_100_connector
 copy .env.example .env
 ```
 
-Fill `ConnectorStore__*` in `.env` (MySQL host, database, user, password, and a 32-byte secrets key). DocuWare, Sage, synchronization settings, mappings, named synchronizations, and operator accounts live in that database, not in `appsettings.json`. On an empty database, the first start applies `Database/Migrations` and imports `Database/seed.local.json` when `company` or `user` is empty. That seed file is not committed.
+Fill `ConnectorStore__*` in `.env` (MySQL host, database, user, password, and a 32-byte secrets key). DocuWare, Sage, synchronization settings, mappings, named synchronizations, and operator accounts live in that database, not in `appsettings.json`. On an empty database, the first start applies `Database/Migrations` and imports `Database/seed.local.json` when `setting` or `user` is empty. That seed file is not committed.
 
 ```powershell
 dotnet run --launch-profile http
@@ -44,7 +44,7 @@ npm run dev
 - API tests: `dotnet test` from this folder
 - UI tests: `npm test` from `frontend/`
 
-`appsettings.Development.json` sets `Synchronization:Enabled` to `false`, so the worker does not poll. Queued work, including `POST /api/sync/run` and `POST /api/synchronizations/{id}/run`, still runs. To poll locally, set `Synchronization:Enabled` to `true` in that file, or remove the key so the MySQL value is used.
+`appsettings.Development.json` sets `Synchronization:Enabled` to `false`, so the worker does not poll. `POST /api/synchronizations/{id}/run` still queues that job. To poll locally, set `Synchronization:Enabled` to `true` in that file, or remove the key so the MySQL value is used.
 
 The HTTPS launch profile is `--launch-profile https` (`https://localhost:7277`).
 
@@ -53,13 +53,13 @@ The HTTPS launch profile is `--launch-profile https` (`https://localhost:7277`).
 | Kind | Where |
 |---|---|
 | MySQL connection and the secrets key | `.env` or environment variables. Not committed. |
-| DocuWare, Sage, and sync settings | MySQL company key/value tables. Passwords are encrypted with `ConnectorStore__SecretsKey`. |
+| DocuWare, Sage, and sync settings | MySQL `setting` key/value rows. Passwords are encrypted with `ConnectorStore__SecretsKey`. |
 | Mappings and named synchronizations | MySQL `mapping_table`, `mapping_field`, and `synchronization`. |
 | Synchronization history | MySQL `logs`. |
 | Operator passwords | `user.password_hash`. The UI stores a signed bearer token. |
 | API origin and status refresh | `frontend/.env.development` or `frontend/.env`. Public in the built bundle. |
 
-`GET /api/health`, `POST /api/auth/login`, and `POST /api/leads` do not require a session. Other routes require `Authorization: Bearer`. `GET /api/configuration` returns passwords and the DocuWare client secret as configured/not-configured flags. Revealing a stored secret requires the operator's own password.
+`GET /api/health` and `POST /api/auth/login` do not require a session. Other routes require `Authorization: Bearer`. `GET /api/configuration` returns passwords and the DocuWare client secret as configured/not-configured flags. Revealing a stored secret requires the operator's own password.
 
 ## Documentation
 

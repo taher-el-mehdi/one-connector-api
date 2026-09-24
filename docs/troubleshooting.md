@@ -36,7 +36,7 @@ Common failures:
 | Sage 80011 | Do not map `CT_Type` on reverse; close the Sage fiche; `cbMarq` changed |
 | Sage 80003 | Close Sage 100 and retry |
 | Worker idle | `Synchronization:Enabled`, `IntervalSeconds`, `/api/sync/status` |
-| Ping-pong updates | Fingerprint/writable comparison should skip; inspect tracking `Fingerprint` |
+| Ping-pong updates | Fingerprint/writable comparison should skip; inspect `file.fingerprint` on the tracking row |
 | Logs show secrets | They should not; file an issue if a token appears |
 
-GET `/api/sync/errors` lists failed tracking rows with `LastError`.
+GET `/api/sync/errors` lists failed tracking rows with `errorMessage` and `file`.

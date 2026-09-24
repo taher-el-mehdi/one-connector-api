@@ -15,6 +15,11 @@ public interface ISyncTrackingStore
 
     Task<SyncTrackingRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
+    Task<SyncTrackingRecord?> GetForSynchronizationAsync(
+        int synchronizationId,
+        string sageNumber,
+        CancellationToken cancellationToken);
+
     Task<SyncTrackingRecord?> GetByDocumentIdAsync(
         SyncDirection direction,
         EntityType entityType,

@@ -25,6 +25,8 @@ public sealed class DocuWareDocumentService : IDocuWareDocumentService, IAsyncDi
     private Organization? _organization;
     private readonly Dictionary<EntityType, FileCabinet> _cabinets = new();
     private readonly Dictionary<EntityType, Dialog> _dialogs = new();
+    private readonly Dictionary<string, FileCabinet> _cabinetsByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dialog> _dialogsByName = new(StringComparer.OrdinalIgnoreCase);
 
     public DocuWareDocumentService(
         IDocuWareConnectionFactory connectionFactory,
@@ -197,6 +199,83 @@ public sealed class DocuWareDocumentService : IDocuWareDocumentService, IAsyncDi
             },
             cancellationToken);
 
+    public Task<DocuWareDocumentInfo?> FindInCabinetAsync(
+        string cabinetName,
+        string fieldName,
+        string fieldValue,
+        CancellationToken cancellationToken) =>
+        _resilience.ExecuteAsync(
+            async ct =>
+            {
+                var dialog = await ResolveNamedDialogAsync(cabinetName, ct).ConfigureAwait(false);
+                var expression = new DialogExpression
+                {
+                    Operation = DialogExpressionOperation.And,
+                    Condition = [DialogExpressionCondition.Create(fieldName, fieldValue)],
+                    Count = 1
+                };
+                var result = await dialog.GetDocumentsResultAsync(expression).ConfigureAwait(false);
+                var document = result.Items?.FirstOrDefault();
+                return document is null ? null : DocuWareIndexFieldMapper.ToInfo(document, EntityType.Supplier);
+            },
+            cancellationToken);
+
+    public Task UpdateCabinetFieldsAsync(
+        string cabinetName,
+        int documentId,
+        IReadOnlyList<IndexFieldValue> fields,
+        CancellationToken cancellationToken) =>
+        _resilience.ExecuteAsync(
+            async ct =>
+            {
+                var dialog = await ResolveNamedDialogAsync(cabinetName, ct).ConfigureAwait(false);
+                var expression = new DialogExpression
+                {
+                    Operation = DialogExpressionOperation.And,
+                    Condition = [DialogExpressionCondition.Create("DWDOCID", documentId.ToString())],
+                    Count = 1
+                };
+                var result = await dialog.GetDocumentsResultAsync(expression).ConfigureAwait(false);
+                var document = result.Items?.FirstOrDefault()
+                    ?? throw new InvalidOperationException($"DocuWare document {documentId} was not found in '{cabinetName}'.");
+                await document.PutToFieldsRelationForDocumentIndexFieldsAsync(new DocumentIndexFields
+                {
+                    Field = fields.Select(DocuWareIndexFieldMapper.ToSdkField).ToList()
+                }).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken);
+
+    public Task<int> CreateInCabinetAsync(
+        string cabinetName,
+        string fileName,
+        IReadOnlyList<IndexFieldValue> fields,
+        CancellationToken cancellationToken) =>
+        _resilience.ExecuteAsync(
+            async ct =>
+            {
+                var cabinet = await ResolveNamedCabinetAsync(cabinetName, ct).ConfigureAwait(false);
+                var sdkFields = fields.Select(DocuWareIndexFieldMapper.ToSdkField).ToArray();
+                var payload = JsonSerializer.Serialize(
+                    fields.ToDictionary(field => field.Name, field => field.Value),
+                    new JsonSerializerOptions { WriteIndented = true });
+                var tempPath = Path.Combine(Path.GetTempPath(), fileName);
+                await File.WriteAllTextAsync(tempPath, payload, Encoding.UTF8, ct).ConfigureAwait(false);
+                try
+                {
+                    var uploaded = await cabinet.EasyUploadSingleDocumentAsync(new FileInfo(tempPath), sdkFields).ConfigureAwait(false);
+                    return uploaded.Content.Id;
+                }
+                finally
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+            },
+            cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         await _gate.WaitAsync().ConfigureAwait(false);
@@ -207,6 +286,8 @@ public sealed class DocuWareDocumentService : IDocuWareDocumentService, IAsyncDi
             _organization = null;
             _cabinets.Clear();
             _dialogs.Clear();
+            _cabinetsByName.Clear();
+            _dialogsByName.Clear();
         }
         finally
         {
@@ -365,6 +446,67 @@ public sealed class DocuWareDocumentService : IDocuWareDocumentService, IAsyncDi
         _organization = null;
         _cabinets.Clear();
         _dialogs.Clear();
+        _cabinetsByName.Clear();
+        _dialogsByName.Clear();
+    }
+
+    private async Task<FileCabinet> ResolveNamedCabinetAsync(string cabinetName, CancellationToken cancellationToken)
+    {
+        var name = cabinetName.Trim();
+        if (_cabinetsByName.TryGetValue(name, out var cached))
+        {
+            return cached;
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_cabinetsByName.TryGetValue(name, out cached))
+            {
+                return cached;
+            }
+
+            var cabinets = await LoadCabinetsAsync(cancellationToken).ConfigureAwait(false);
+            var resolved = cabinets.FirstOrDefault(cabinet =>
+                string.Equals(cabinet.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"DocuWare file cabinet '{name}' was not found.");
+            _cabinetsByName[name] = resolved;
+            return resolved;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<Dialog> ResolveNamedDialogAsync(string cabinetName, CancellationToken cancellationToken)
+    {
+        var name = cabinetName.Trim();
+        if (_dialogsByName.TryGetValue(name, out var cached))
+        {
+            return cached;
+        }
+
+        var cabinet = await ResolveNamedCabinetAsync(name, cancellationToken).ConfigureAwait(false);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_dialogsByName.TryGetValue(name, out cached))
+            {
+                return cached;
+            }
+
+            var dialogInfos = cabinet.GetDialogInfosFromSearchesRelation();
+            var dialogInfo = dialogInfos.Dialog?.FirstOrDefault()
+                ?? throw new InvalidOperationException($"No search dialog is available for file cabinet '{name}'.");
+            var dialog = dialogInfo.GetDialogFromSelfRelation();
+            _dialogsByName[name] = dialog;
+            return dialog;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<IReadOnlyList<FileCabinet>> LoadCabinetsAsync(CancellationToken cancellationToken)

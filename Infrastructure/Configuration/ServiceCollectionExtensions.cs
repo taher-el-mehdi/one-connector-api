@@ -49,6 +49,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SageMappingRelocation>();
         services.AddHostedService<SageMappingRelocationService>();
         services.AddSingleton<SageSchemaReader>();
+        services.AddSingleton<SageMappedTableReader>();
+        services.AddScoped<IMappedSageToDocuWareSync, MappedSageToDocuWareSync>();
         services.AddSingleton<SageQueryCatalog>();
         services.AddSingleton<ISageRepositoryFactory, SageRepositoryFactory>();
         services.AddSingleton<ISyncTrackingStore, MySqlSyncTrackingStore>();
@@ -62,8 +64,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDocuWareSettingsStore, DocuWareSettingsStore>();
         services.AddSingleton<ISageSettingsStore, SageSettingsStore>();
         services.AddSingleton<ISynchronizationSettingsStore, SynchronizationSettingsStore>();
+        services.AddSingleton<IConfigurationCatalog, ConfigurationCatalogStore>();
         services.AddSingleton<ISynchronizationStore, SynchronizationStore>();
-        services.AddSingleton<ILeadStore, LeadStore>();
         services.AddAuthentication(ConnectorSessionDefaults.Scheme)
             .AddScheme<AuthenticationSchemeOptions, SessionTokenAuthenticationHandler>(
                 ConnectorSessionDefaults.Scheme,
@@ -77,20 +79,27 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static SyncTrackingRecordDto ToDto(this Domain.Entities.SyncTrackingRecord record) =>
-        new()
+    public static SyncTrackingRecordDto ToDto(this Domain.Entities.SyncTrackingRecord record)
+    {
+        object? file = null;
+        var fileJson = record.SerializeFile();
+        if (!string.IsNullOrWhiteSpace(fileJson))
+        {
+            file = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(fileJson);
+        }
+
+        return new()
         {
             Id = record.Id,
-            Direction = record.Direction.ToString(),
-            EntityType = record.EntityType.ToString(),
-            SageNumber = record.SageNumber,
-            DocuWareDocumentId = record.DocuWareDocumentId,
+            SynchronizationId = record.SynchronizationId,
             Status = record.Status.ToString(),
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
             LastAttemptAt = record.LastAttemptAt,
             LastSuccessAt = record.LastSuccessAt,
             RetryCount = record.RetryCount,
-            LastError = record.LastError
+            ErrorMessage = record.ErrorMessage,
+            File = file
         };
+    }
 }

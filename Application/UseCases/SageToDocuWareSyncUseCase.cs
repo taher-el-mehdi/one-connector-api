@@ -68,6 +68,7 @@ public sealed class SageToDocuWareSyncUseCase : ISageToDocuWareSyncUseCase
                     EntityType = entityType,
                     SageNumber = row.Key
                 };
+            tracking.BindSynchronization(request.SynchronizationId);
 
             tracking.Status = SyncStatus.Processing;
             tracking.LastAttemptAt = DateTimeOffset.UtcNow;
@@ -88,12 +89,14 @@ public sealed class SageToDocuWareSyncUseCase : ISageToDocuWareSyncUseCase
                 {
                     tracking.Status = SyncStatus.Skipped;
                     tracking.DocuWareDocumentId = existing.Id;
+                    tracking.ErrorMessage = null;
                     tracking.UpdatedAt = DateTimeOffset.UtcNow;
                     await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
                     skipped++;
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Skipped",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         row.Key,
                         existing.Id);
@@ -108,13 +111,14 @@ public sealed class SageToDocuWareSyncUseCase : ISageToDocuWareSyncUseCase
                     tracking.Status = SyncStatus.Completed;
                     tracking.Fingerprint = fingerprint;
                     tracking.LastSuccessAt = DateTimeOffset.UtcNow;
-                    tracking.LastError = null;
+                    tracking.ErrorMessage = null;
                     tracking.RetryCount = 0;
                     updated++;
                     messages.Add($"UPDATE {row.Key} -> {existing.Id}");
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Update",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Update",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         row.Key,
                         existing.Id);
@@ -129,13 +133,14 @@ public sealed class SageToDocuWareSyncUseCase : ISageToDocuWareSyncUseCase
                     tracking.Status = SyncStatus.Completed;
                     tracking.Fingerprint = fingerprint;
                     tracking.LastSuccessAt = DateTimeOffset.UtcNow;
-                    tracking.LastError = null;
+                    tracking.ErrorMessage = null;
                     tracking.RetryCount = 0;
                     created++;
                     messages.Add($"CREATE {row.Key} -> {documentId}");
                     _logger.LogInformation(
-                        "SyncId={SyncId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Create",
+                        "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} DocuWareDocumentId={DocumentId} Status=Completed Action=Create",
                         syncId,
+                        request.SynchronizationId,
                         entityType,
                         row.Key,
                         documentId);
@@ -148,14 +153,15 @@ public sealed class SageToDocuWareSyncUseCase : ISageToDocuWareSyncUseCase
             {
                 failed++;
                 tracking.Status = SyncStatus.Failed;
-                tracking.LastError = ex.Message;
+                tracking.ErrorMessage = ex.Message;
                 tracking.RetryCount++;
                 tracking.UpdatedAt = DateTimeOffset.UtcNow;
                 await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
                 _logger.LogError(
                     ex,
-                    "SyncId={SyncId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} Status=Failed Permanent={Permanent}",
+                    "SyncId={SyncId} SynchronizationId={SynchronizationId} Direction=SageToDocuWare Entity={Entity} SageNumber={SageNumber} Status=Failed Permanent={Permanent}",
                     syncId,
+                    request.SynchronizationId,
                     entityType,
                     row.Key,
                     ErrorClassifier.Classify(ex) == ErrorClass.Permanent);

@@ -28,9 +28,6 @@ The React app calls the ASP.NET Core API only. Paths below are the current API, 
 | Errors | `error` fields in JSON logs | `GET /api/sync/errors` | — | API only. No Errors screen |
 | Retry one record | None in the old UI | `POST /api/sync/retry/{syncId}` | — | API only |
 | Sync one document | None in the old UI | `POST /api/sync/document/{documentId}?entityType=` | `SyncControls` | New API capability |
-| Browse suppliers | None | `GET /api/suppliers` | `SuppliersPage` | API capability |
-| Browse accounts | None | `GET /api/accounts` | `AccountsPage` | API capability |
-| Browse sections | None | `GET /api/sections` | `SectionsPage` | API capability |
 | Dashboard totals | None | `GET /api/sync/status` (`lastCycle`, `recent`) | `DashboardPage` | Built from real status data |
 
 ## Frontend-consumed endpoints
@@ -43,9 +40,6 @@ The React app calls the ASP.NET Core API only. Paths below are the current API, 
 | GET | `/api/configuration` | Non-secret configuration snapshot | Configuration |
 | GET | `/api/sync/status` | Worker flags, in-progress flag, last cycle summary, latest 50 tracking rows | Dashboard, Synchronization |
 | GET | `/api/sync/errors` | Latest 100 failed tracking rows | API only |
-| GET | `/api/suppliers` | Sage supplier rows | Suppliers |
-| GET | `/api/accounts` | Sage chart-of-accounts rows | Chart of accounts |
-| GET | `/api/sections` | Sage analytic-section rows | Analytic sections |
 | GET | `/api/entities/tables` | Base tables in the connected Sage database | Entities |
 | GET | `/api/entities/tables/{schema}/{name}` | One Sage table and its columns | Entity table |
 | GET | `/api/cabinets` | File cabinets in the connected DocuWare organization | Cabinets |

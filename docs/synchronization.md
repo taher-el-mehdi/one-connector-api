@@ -34,9 +34,10 @@ There is no delete propagation in either direction.
 
 `SynchronizationWorker` (`BackgroundService`):
 
-- Uses the MySQL `logs` table.
+- Uses the MySQL `logs` table (`id_synchronization`, `error_message`, `file` JSON for per-record payload).
+- Fingerprint and business keys for skip/idempotency live in `file`, not as columns.
 - If `Synchronization:Enabled`, runs one cycle immediately, then every `IntervalSeconds`.
-- Also drains the manual API queue (`POST /api/sync/run` and entity-specific posts).
+- Also drains jobs queued by `POST /api/synchronizations/{id}/run`.
 - Uses `CancellationToken` throughout.
 - Catches per-cycle exceptions so the process stays up.
 

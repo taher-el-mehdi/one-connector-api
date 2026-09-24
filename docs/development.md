@@ -12,7 +12,7 @@ dotnet run --launch-profile http
 
 HTTPS profile: `--launch-profile https` (`https://localhost:7277`).
 
-`Synchronization:Enabled=false` in `appsettings.Development.json` starts the API without polling, even when the MySQL row is enabled. `POST /api/sync/run` still queues a cycle, and the worker executes queued work.
+`Synchronization:Enabled=false` in `appsettings.Development.json` starts the API without polling, even when the MySQL row is enabled. `POST /api/synchronizations/{id}/run` still queues that job, and the worker executes queued work.
 
 To run continuous sync locally, set `Synchronization:Enabled` to `true` in `appsettings.Development.json`, or remove that key so the MySQL value is used.
 
@@ -71,7 +71,7 @@ npm run build
 | Kind | Where it lives |
 |---|---|
 | API base URL and UI poll interval | Frontend environment variables. They are public once the bundle is built. |
-| DocuWare, Sage, and sync settings | MySQL company key/value tables. The API loads them at startup. |
+| DocuWare, Sage, and sync settings | MySQL `setting` rows. The API loads them at startup. |
 | MySQL connection and the secrets key | `.env` or environment variables. Not committed. |
 | Operator passwords | `user.password_hash` in MySQL. The UI receives a signed bearer token. |
 | DocuWare and Sage passwords | Encrypted columns in MySQL. The UI receives a configured/not-configured flag. |

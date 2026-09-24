@@ -40,5 +40,23 @@ public interface IDocuWareDocumentService
         IReadOnlyList<IndexFieldValue> fields,
         CancellationToken cancellationToken);
 
+    Task<DocuWareDocumentInfo?> FindInCabinetAsync(
+        string cabinetName,
+        string fieldName,
+        string fieldValue,
+        CancellationToken cancellationToken);
+
+    Task UpdateCabinetFieldsAsync(
+        string cabinetName,
+        int documentId,
+        IReadOnlyList<IndexFieldValue> fields,
+        CancellationToken cancellationToken);
+
+    Task<int> CreateInCabinetAsync(
+        string cabinetName,
+        string fileName,
+        IReadOnlyList<IndexFieldValue> fields,
+        CancellationToken cancellationToken);
+
     Task TestConnectionAsync(CancellationToken cancellationToken);
 }
