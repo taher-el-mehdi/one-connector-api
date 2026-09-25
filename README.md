@@ -16,14 +16,14 @@ Operators can also define field mappings and named synchronizations in the conso
 
 ## Quick start
 
-Requirements: .NET 10 SDK, MySQL 8, Node.js 22 or newer, SQL Server access to the Sage company database, and a DocuWare Cloud or on-prem Platform user. ODBC is not required. Sage uses `Microsoft.Data.SqlClient`.
+Requirements: .NET 10 SDK, Node.js 22 or newer, SQL Server for the connector store and for the Sage company database, and a DocuWare Cloud or on-prem Platform user. ODBC is not required. Both databases use `Microsoft.Data.SqlClient`.
 
 ```powershell
 cd docuware_sage_100_connector
 copy .env.example .env
 ```
 
-Fill `ConnectorStore__*` in `.env` (MySQL host, database, user, password, and a 32-byte secrets key). DocuWare, Sage, synchronization settings, mappings, named synchronizations, and operator accounts live in that database, not in `appsettings.json`. On an empty database, the first start applies `Database/Migrations` and imports `Database/seed.local.json` when `setting` or `user` is empty. That seed file is not committed.
+Fill `ConnectorStore__Server`, `ConnectorStore__Database`, and `ConnectorStore__SecretsKey` in `.env`. Leave `ConnectorStore__User` and `ConnectorStore__Password` empty to sign in with Windows authentication, or set both for a SQL Server login. DocuWare, Sage, synchronization settings, mappings, named synchronizations, and operator accounts live in that SQL Server database, not in `appsettings.json`. On an empty database, the first start applies [`Database/schema.sql`](Database/schema.sql) and inserts blank setting rows. Fill those rows in SQL Server, then restart the API.
 
 ```powershell
 dotnet run --launch-profile http
@@ -41,21 +41,36 @@ npm run dev
 - UI: `http://localhost:5173`
 - OpenAPI (Development): `http://localhost:5175/openapi/v1.json`
 - Health: `GET /api/health` (no sign-in)
-- API tests: `dotnet test` from this folder
 - UI tests: `npm test` from `frontend/`
 
-`appsettings.Development.json` sets `Synchronization:Enabled` to `false`, so the worker does not poll. `POST /api/synchronizations/{id}/run` still queues that job. To poll locally, set `Synchronization:Enabled` to `true` in that file, or remove the key so the MySQL value is used.
+`appsettings.Development.json` sets `Synchronization:Enabled` to `false`, so the worker does not poll. `POST /api/synchronizations/{id}/run` still queues that job. To poll locally, set `Synchronization:Enabled` to `true` in that file, or remove the key so the SQL Server value is used.
 
 The HTTPS launch profile is `--launch-profile https` (`https://localhost:7277`).
+
+## Add an operator
+
+Operator accounts are rows in the SQL Server `user` table. This command does not start the API and is not an HTTP route. Run it from this folder so it can read `.env`:
+
+```powershell
+dotnet run --project Cli -- add-user --username admin
+```
+
+The command prompts for a password (8 to 256 characters) so it stays out of shell history. To pass it on the command line instead:
+
+```powershell
+dotnet run --project Cli -- add-user --username admin --password "change-me" --display-name "Admin" --email admin@example.com
+```
+
+`--display-name` and `--email` are optional. The username must be unique. Sign in with that username and password in the operator console.
 
 ## Where settings live
 
 | Kind | Where |
 |---|---|
-| MySQL connection and the secrets key | `.env` or environment variables. Not committed. |
-| DocuWare, Sage, and sync settings | MySQL `setting` key/value rows. Passwords are encrypted with `ConnectorStore__SecretsKey`. |
-| Mappings and named synchronizations | MySQL `mapping_table`, `mapping_field`, and `synchronization`. |
-| Synchronization history | MySQL `logs`. |
+| SQL Server connection and the secrets key | `.env` or environment variables. Not committed. |
+| DocuWare, Sage, and sync settings | SQL Server `setting` key/value rows. Passwords are encrypted with `ConnectorStore__SecretsKey`. |
+| Mappings and named synchronizations | SQL Server `mapping_table`, `mapping_field`, and `synchronization`. |
+| Synchronization history | SQL Server `logs`. |
 | Operator passwords | `user.password_hash`. The UI stores a signed bearer token. |
 | API origin and status refresh | `frontend/.env.development` or `frontend/.env`. Public in the built bundle. |
 

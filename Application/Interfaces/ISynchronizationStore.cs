@@ -23,6 +23,7 @@ public interface ISynchronizationStore
     Task CompleteAsync(
         int id,
         bool success,
+        SynchronizationRunCounts counts,
         TimeSpan successInterval,
         TimeSpan retryDelay,
         DateTime utcNow,
@@ -46,6 +47,19 @@ public interface ISynchronizationStore
     Task<bool> DeleteFilterAsync(int synchronizationId, int filterId, CancellationToken cancellationToken);
 }
 
+public sealed class SynchronizationRunCounts
+{
+    public int TotalRecords { get; init; }
+
+    public int SuccessRecords { get; init; }
+
+    public int FailedRecords { get; init; }
+
+    public int SkippedRecords { get; init; }
+
+    public string? ErrorMessage { get; init; }
+}
+
 public sealed class ClaimedSynchronization
 {
     public int Id { get; init; }
@@ -57,6 +71,8 @@ public sealed class ClaimedSynchronization
     public required string Destination { get; init; }
 
     public int TimeoutSeconds { get; init; }
+
+    public Guid RunId { get; init; }
 }
 
 public sealed class SynchronizationStoreException : Exception

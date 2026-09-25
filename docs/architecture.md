@@ -32,8 +32,6 @@ docuware_sage_100_connector/
   docs/
 ```
 
-Tests live in `docuware_sage_100_connector.Tests`.
-
 ## Runtime flow
 
 ```mermaid

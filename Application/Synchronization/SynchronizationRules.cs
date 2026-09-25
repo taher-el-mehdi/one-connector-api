@@ -18,7 +18,15 @@ public static class SynchronizationRules
         string? description,
         int? maxRetries,
         int? timeoutSeconds,
-        DateTimeOffset? nextRunAt)
+        DateTimeOffset? nextRunAt,
+        bool? recurrenceEnabled,
+        string? recurrenceType,
+        string? recurrenceDays,
+        string? recurrenceTime,
+        int? intervalValue,
+        string? intervalUnit,
+        string? timezone,
+        DateTime utcNow)
     {
         var normalizedDirection = direction?.Trim() ?? string.Empty;
         if (normalizedDirection is not ("one-way" or "two-ways"))
@@ -60,16 +68,35 @@ public static class SynchronizationRules
             throw new ArgumentException($"Timeout must be from 1 to {TimeoutSecondsLimit} seconds.");
         }
 
+        var normalizedSource = RequireEndpoint(source, "Source");
+        var normalizedDestination = RequireEndpoint(destination, "Destination");
+        if (SameConfigurationType(normalizedSource, normalizedDestination))
+        {
+            throw new ArgumentException("Source and destination must be different configuration types.");
+        }
+
+        var recurrence = RecurrenceSchedule.Normalize(
+            recurrenceEnabled,
+            recurrenceType,
+            recurrenceDays,
+            recurrenceTime,
+            intervalValue,
+            intervalUnit,
+            timezone,
+            utcNow);
+        var scheduled = recurrence.Enabled ? recurrence.NextRunAt : nextRunAt?.UtcDateTime;
+
         return new NormalizedSynchronization(
             normalizedDirection,
-            RequireEndpoint(source, "Source"),
-            RequireEndpoint(destination, "Destination"),
+            normalizedSource,
+            normalizedDestination,
             mappingTableId.Value,
             normalizedCode,
             normalizedDescription,
             retries,
             timeout,
-            nextRunAt?.UtcDateTime);
+            scheduled,
+            recurrence);
     }
 
     public static (bool SageToDocuWare, bool DocuWareToSage) RunDirections(
@@ -82,28 +109,76 @@ public static class SynchronizationRules
             return (true, true);
         }
 
-        var sageToDocuWare = string.Equals(source, "Sage", StringComparison.Ordinal)
-            && string.Equals(destination, "DocuWare", StringComparison.Ordinal);
-        var docuWareToSage = string.Equals(source, "DocuWare", StringComparison.Ordinal)
-            && string.Equals(destination, "Sage", StringComparison.Ordinal);
+        var sourceType = ConfigurationType(source);
+        var destinationType = ConfigurationType(destination);
+        var sageToDocuWare = sourceType == "Sage" && destinationType == "DocuWare";
+        var docuWareToSage = sourceType == "DocuWare" && destinationType == "Sage";
         if (!sageToDocuWare && !docuWareToSage)
         {
-            sageToDocuWare = string.Equals(source, "Sage", StringComparison.Ordinal);
-            docuWareToSage = string.Equals(source, "DocuWare", StringComparison.Ordinal);
+            sageToDocuWare = sourceType == "Sage";
+            docuWareToSage = sourceType == "DocuWare";
         }
 
         return (sageToDocuWare, docuWareToSage);
     }
 
+    public static bool SameConfigurationType(string source, string destination) =>
+        string.Equals(ConfigurationType(source), ConfigurationType(destination), StringComparison.Ordinal);
+
+    public static (string Code, string Type) SplitEndpoint(string stored)
+    {
+        var separator = stored.LastIndexOf('|');
+        if (separator <= 0 || separator == stored.Length - 1)
+        {
+            var type = ConfigurationType(stored);
+            return (stored, type == "DocuWare" ? "Docuware" : type);
+        }
+
+        return (stored[..separator], stored[(separator + 1)..]);
+    }
+
     private static string RequireEndpoint(string? value, string label)
     {
         var trimmed = value?.Trim() ?? string.Empty;
-        if (trimmed is not ("Sage" or "DocuWare"))
+        if (trimmed.Length == 0)
         {
-            throw new ArgumentException($"{label} must be Sage or DocuWare.");
+            throw new ArgumentException($"Choose a {label.ToLowerInvariant()} configuration.");
+        }
+
+        if (ConfigurationType(trimmed).Length == 0)
+        {
+            throw new ArgumentException($"{label} must be a Sage or DocuWare configuration.");
+        }
+
+        if (trimmed.Contains('|'))
+        {
+            var (code, type) = SplitEndpoint(trimmed);
+            if (code.Length is 0 or > 64 || type.Length > 32)
+            {
+                throw new ArgumentException($"{label} must be a Sage or DocuWare configuration.");
+            }
+
+            var canonicalType = string.Equals(type, "Sage", StringComparison.OrdinalIgnoreCase) ? "Sage" : "Docuware";
+            return $"{code}|{canonicalType}";
         }
 
         return trimmed;
+    }
+
+    private static string ConfigurationType(string value)
+    {
+        var type = value.Contains('|') ? value[(value.LastIndexOf('|') + 1)..] : value;
+        if (type.Equals("Sage", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Sage";
+        }
+
+        if (type.Equals("Docuware", StringComparison.OrdinalIgnoreCase) || type.Equals("DocuWare", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DocuWare";
+        }
+
+        return string.Empty;
     }
 }
 
@@ -116,7 +191,8 @@ public sealed record NormalizedSynchronization(
     string? Description,
     int MaxRetries,
     int TimeoutSeconds,
-    DateTime? NextRunAt);
+    DateTime? NextRunAt,
+    NormalizedRecurrence Recurrence);
 
 public static class SynchronizationFilterRules
 {

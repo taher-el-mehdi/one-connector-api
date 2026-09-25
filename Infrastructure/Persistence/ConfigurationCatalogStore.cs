@@ -3,7 +3,7 @@ using DocuWareSageConnector.Application.DTOs;
 using DocuWareSageConnector.Application.Interfaces;
 using DocuWareSageConnector.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -30,11 +30,15 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
 
     public async Task<IReadOnlyList<ConfigurationEntry>> ListAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT type, code, MAX(description) AS description, MAX(status) AS status
+            SELECT 
+                type,
+                code,
+                MAX(description) AS description,
+                CAST(MAX(CAST(status AS INT)) AS BIT) AS status
             FROM setting
             GROUP BY type, code
             ORDER BY type, code
@@ -88,9 +92,9 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
 
         var now = DateTime.UtcNow;
         var actor = userId.ToString("D");
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var exists = new MySqlCommand(
+        await using var exists = new SqlCommand(
             """
             SELECT COUNT(*) FROM setting
             WHERE type = @type AND code = @code
@@ -103,15 +107,15 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
             throw new SettingsValidationException("code_taken");
         }
 
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             foreach (var (key, value) in rows)
             {
-                await using var insert = new MySqlCommand(
+                await using var insert = new SqlCommand(
                     """
                     INSERT INTO setting
-                        (type, code, description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
+                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
                     VALUES
                         (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, 0, 0, 1)
                     """,
@@ -146,13 +150,13 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
 
     public async Task<IReadOnlyList<ConfigurationSettingRow>> ListRowsAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT type, code, description, `key`, `value`, configured, status, `required`
+            SELECT type, code, description, [key], [value], configured, status, [required]
             FROM setting
-            ORDER BY type, code, `key`
+            ORDER BY type, code, [key]
             """,
             connection);
         var rows = new List<ConfigurationSettingRow>();
@@ -210,24 +214,24 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
         var actor = userId.ToString("D");
         var added = 0;
         var updated = 0;
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             foreach (var row in normalized)
             {
-                await using var update = new MySqlCommand(
+                await using var update = new SqlCommand(
                     """
                     UPDATE setting
                     SET description = @description,
-                        `value` = @value,
+                        [value] = @value,
                         configured = @configured,
                         status = @status,
-                        `required` = @required,
+                        [required] = @required,
                         updated_at = @now,
                         updated_by = @actor
-                    WHERE type = @type AND code = @code AND `key` = @key
+                    WHERE type = @type AND code = @code AND [key] = @key
                     """,
                     connection,
                     transaction);
@@ -247,10 +251,10 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                     continue;
                 }
 
-                await using var insert = new MySqlCommand(
+                await using var insert = new SqlCommand(
                     """
                     INSERT INTO setting
-                        (type, code, description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
+                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
                     VALUES
                         (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @configured, @status, @required)
                     """,

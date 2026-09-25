@@ -1,4 +1,4 @@
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -8,7 +8,7 @@ namespace DocuWareSageConnector.Infrastructure.Persistence;
 /// </summary>
 internal static class CompanySchema
 {
-    public static void Remove(MySqlConnection connection)
+    public static void Remove(SqlConnection connection)
     {
         DropCompanyColumn(connection, "logs");
         DropCompanyColumn(connection, "mapping_field");
@@ -26,7 +26,7 @@ internal static class CompanySchema
         }
     }
 
-    private static void DropCompanyColumn(MySqlConnection connection, string table)
+    private static void DropCompanyColumn(SqlConnection connection, string table)
     {
         if (!TableExists(connection, table) || !ColumnExists(connection, table, "company"))
         {
@@ -37,25 +37,25 @@ internal static class CompanySchema
         DropForeignKeysOnColumn(connection, table, "company");
         foreach (var index in IndexesUsingColumn(connection, table, "company"))
         {
-            Execute(connection, $"ALTER TABLE `{table}` DROP INDEX `{index}`");
+            Execute(connection, $"ALTER TABLE [{table}] DROP INDEX [{index}]");
         }
 
         var primaryKey = PrimaryKeyColumns(connection, table);
         if (primaryKey.Contains("company", StringComparer.OrdinalIgnoreCase))
         {
             var remaining = primaryKey.Where(column => !column.Equals("company", StringComparison.OrdinalIgnoreCase)).ToArray();
-            Execute(connection, $"ALTER TABLE `{table}` DROP PRIMARY KEY");
+            Execute(connection, $"ALTER TABLE [{table}] DROP PRIMARY KEY");
             if (remaining.Length > 0)
             {
-                var columns = string.Join(", ", remaining.Select(column => $"`{column}`"));
-                Execute(connection, $"ALTER TABLE `{table}` ADD PRIMARY KEY ({columns})");
+                var columns = string.Join(", ", remaining.Select(column => $"[{column}]"));
+                Execute(connection, $"ALTER TABLE [{table}] ADD PRIMARY KEY ({columns})");
             }
         }
 
-        Execute(connection, $"ALTER TABLE `{table}` DROP COLUMN `company`");
+        Execute(connection, $"ALTER TABLE [{table}] DROP COLUMN [company]");
     }
 
-    private static void DeleteDuplicateKeys(MySqlConnection connection, string table)
+    private static void DeleteDuplicateKeys(SqlConnection connection, string table)
     {
         var sql = table switch
         {
@@ -65,14 +65,14 @@ internal static class CompanySchema
                 INNER JOIN setting AS keeper
                   ON keeper.type = older.type
                  AND keeper.code = older.code
-                 AND keeper.`key` = older.`key`
+                 AND keeper.[key] = older.[key]
                  AND keeper.company < older.company
                 """,
             "setting_docuware" or "setting_erp" or "setting_synchronization" =>
                 $"""
-                DELETE older FROM `{table}` AS older
-                INNER JOIN `{table}` AS keeper
-                  ON keeper.`key` = older.`key`
+                DELETE older FROM [{table}] AS older
+                INNER JOIN [{table}] AS keeper
+                  ON keeper.[key] = older.[key]
                  AND keeper.company < older.company
                 """,
             "mapping_table" =>
@@ -98,7 +98,7 @@ internal static class CompanySchema
         }
     }
 
-    private static void EnsureIndexes(MySqlConnection connection)
+    private static void EnsureIndexes(SqlConnection connection)
     {
         if (TableExists(connection, "logs"))
         {
@@ -125,17 +125,9 @@ internal static class CompanySchema
                 "ALTER TABLE synchronization ADD UNIQUE KEY uq_synchronization_code (code)");
         }
 
-        if (TableExists(connection, "synchronization") && ColumnExists(connection, "synchronization", "next_run_at"))
-        {
-            EnsureIndex(
-                connection,
-                "synchronization",
-                "ix_synchronization_due",
-                "ALTER TABLE synchronization ADD KEY ix_synchronization_due (next_run_at)");
-        }
     }
 
-    private static void EnsureIndex(MySqlConnection connection, string table, string index, string sql)
+    private static void EnsureIndex(SqlConnection connection, string table, string index, string sql)
     {
         if (!IndexExists(connection, table, index))
         {
@@ -143,14 +135,14 @@ internal static class CompanySchema
         }
     }
 
-    private static void DropForeignKeysReferencingCompany(MySqlConnection connection)
+    private static void DropForeignKeysReferencingCompany(SqlConnection connection)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT TABLE_NAME, CONSTRAINT_NAME
-            FROM information_schema.KEY_COLUMN_USAGE
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND REFERENCED_TABLE_NAME = 'company'
+            SELECT OBJECT_NAME(fk.parent_object_id) AS TABLE_NAME, fk.name AS CONSTRAINT_NAME
+            FROM sys.foreign_keys AS fk
+            INNER JOIN sys.tables AS referenced ON referenced.object_id = fk.referenced_object_id
+            WHERE referenced.name = 'company'
             """,
             connection);
         var keys = new List<(string Table, string Constraint)>();
@@ -164,17 +156,17 @@ internal static class CompanySchema
 
         foreach (var (table, constraint) in keys)
         {
-            Execute(connection, $"ALTER TABLE `{table}` DROP FOREIGN KEY `{constraint}`");
+            Execute(connection, $"ALTER TABLE [{table}] DROP CONSTRAINT [{constraint}]");
         }
     }
 
-    private static void DropForeignKeysOnColumn(MySqlConnection connection, string table, string column)
+    private static void DropForeignKeysOnColumn(SqlConnection connection, string table, string column)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT CONSTRAINT_NAME
             FROM information_schema.KEY_COLUMN_USAGE
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = @table
               AND COLUMN_NAME = @column
               AND REFERENCED_TABLE_NAME IS NOT NULL
@@ -193,20 +185,22 @@ internal static class CompanySchema
 
         foreach (var name in names.Distinct(StringComparer.Ordinal))
         {
-            Execute(connection, $"ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`");
+            Execute(connection, $"ALTER TABLE [{table}] DROP FOREIGN KEY [{name}]");
         }
     }
 
-    private static IReadOnlyList<string> IndexesUsingColumn(MySqlConnection connection, string table, string column)
+    private static IReadOnlyList<string> IndexesUsingColumn(SqlConnection connection, string table, string column)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT DISTINCT INDEX_NAME
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = @table
-              AND COLUMN_NAME = @column
-              AND INDEX_NAME <> 'PRIMARY'
+            SELECT DISTINCT i.name AS INDEX_NAME
+            FROM sys.indexes AS i
+            INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            INNER JOIN sys.tables AS t ON t.object_id = i.object_id
+            WHERE t.name = @table
+              AND c.name = @column
+              AND i.is_primary_key = 0
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
@@ -221,16 +215,18 @@ internal static class CompanySchema
         return names;
     }
 
-    private static IReadOnlyList<string> PrimaryKeyColumns(MySqlConnection connection, string table)
+    private static IReadOnlyList<string> PrimaryKeyColumns(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT COLUMN_NAME
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = @table
-              AND INDEX_NAME = 'PRIMARY'
-            ORDER BY SEQ_IN_INDEX
+            SELECT c.name AS COLUMN_NAME
+            FROM sys.indexes AS i
+            INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            INNER JOIN sys.tables AS t ON t.object_id = i.object_id
+            WHERE t.name = @table
+              AND i.is_primary_key = 1
+            ORDER BY ic.key_ordinal
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
@@ -244,32 +240,32 @@ internal static class CompanySchema
         return names;
     }
 
-    private static void Execute(MySqlConnection connection, string sql)
+    private static void Execute(SqlConnection connection, string sql)
     {
-        using var command = new MySqlCommand(sql, connection) { CommandTimeout = 60 };
+        using var command = new SqlCommand(sql, connection) { CommandTimeout = 60 };
         command.ExecuteNonQuery();
     }
 
-    private static bool TableExists(MySqlConnection connection, string table)
+    private static bool TableExists(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @table
+            WHERE TABLE_CATALOG = DB_NAME() AND TABLE_NAME = @table
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool ColumnExists(MySqlConnection connection, string table, string column)
+    private static bool ColumnExists(SqlConnection connection, string table, string column)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = @table
               AND COLUMN_NAME = @column
             """,
@@ -279,15 +275,14 @@ internal static class CompanySchema
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool IndexExists(MySqlConnection connection, string table, string index)
+    private static bool IndexExists(SqlConnection connection, string table, string index)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = @table
-              AND INDEX_NAME = @index
+            FROM sys.indexes AS i
+            INNER JOIN sys.tables AS t ON t.object_id = i.object_id
+            WHERE t.name = @table AND i.name = @index
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);

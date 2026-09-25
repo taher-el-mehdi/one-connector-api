@@ -49,19 +49,17 @@ Synchronization state is the MySQL table `logs`.
 
 ## Connector store
 
-The process needs a MySQL connection before it can read DocuWare, Sage, synchronization, or tracking settings. Put that connection in `.env` (or real environment variables). `.env` is not committed. Copy `.env.example`.
+The process needs a SQL Server connection before it can read DocuWare, Sage, synchronization, or tracking settings. Put that connection in `.env` (or real environment variables). `.env` is not committed. Copy `.env.example`.
 
 | Key | Purpose |
 |---|---|
-| `ConnectorStore__Host` | MySQL hostname. `localhost` only when MySQL runs on this computer. On Hostinger, use the hostname from hPanel. |
-| `ConnectorStore__Port` | Default `3306` |
-| `ConnectorStore__Database` | Database name |
-| `ConnectorStore__User` | Database user |
-| `ConnectorStore__Password` | Database password |
-| `ConnectorStore__SslMode` | `Preferred`, `Required`, or `None` |
+| `ConnectorStore__Server` | SQL Server instance, such as `DESKTOP-S4EOQ9N\BCDEMO` |
+| `ConnectorStore__Database` | Database name, such as `one_connector` |
+| `ConnectorStore__User` | SQL login. Leave empty, with the password, to use Windows authentication. |
+| `ConnectorStore__Password` | SQL login password. Leave empty when using Windows authentication. |
 | `ConnectorStore__SecretsKey` | Base64 32-byte key. Encrypts DocuWare and Sage passwords at rest. The same key must stay with the data. |
 
-Startup applies the SQL in `Database/Migrations`. While `setting` or `user` is empty, the API imports `Database/seed.local.json` once. That file is not committed. After the import, change rows in MySQL and restart the API.
+Startup applies `Database/schema.sql` when `setting` is missing. An empty `setting` table receives blank default rows. Fill those rows in SQL Server and restart the API. Operator accounts are rows in `user`; startup does not import a seed file.
 
 In Development, `appsettings.Development.json` forces `Synchronization:Enabled` to `false` so the worker does not poll. The database keeps the stored value.
 

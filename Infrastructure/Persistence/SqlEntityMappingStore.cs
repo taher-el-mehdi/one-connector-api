@@ -2,15 +2,15 @@ using DocuWareSageConnector.Application.DTOs;
 using DocuWareSageConnector.Application.Interfaces;
 using DocuWareSageConnector.Application.Mapping;
 using Microsoft.Extensions.Configuration;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
-public sealed class MySqlEntityMappingStore : IEntityMappingStore
+public sealed class SqlEntityMappingStore : IEntityMappingStore
 {
     private readonly string _connectionString;
 
-    public MySqlEntityMappingStore(IConfiguration configuration)
+    public SqlEntityMappingStore(IConfiguration configuration)
     {
         _connectionString = ConnectorStoreConnections.RequireConnectionString(configuration);
     }
@@ -31,7 +31,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 Mappings = await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false)
             };
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -50,7 +50,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             return (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(mapping => mapping.Id == id);
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -61,25 +61,27 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         Guid userId,
         CancellationToken cancellationToken)
     {
-        var pair = EntityMappingRules.NormalizePair(request.EntityName, request.CabinetName);
+        var pair = Normalize(request);
         var now = DateTime.UtcNow;
         var actor = userId.ToString("D");
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await RequireSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureConfigsExistAsync(connection, pair, cancellationToken).ConfigureAwait(false);
             await EnsurePairAvailableAsync(connection, pair, exceptId: null, cancellationToken).ConfigureAwait(false);
-            await using var command = new MySqlCommand(
+            await EnsureCodeAvailableAsync(connection, pair.Code, exceptId: null, cancellationToken).ConfigureAwait(false);
+            await using var command = new SqlCommand(
                 """
                 INSERT INTO mapping_table
-                    (entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
+                    (entity_name, cabinet_name, entity_code, entity_type, cabinet_code, cabinet_type, code, description, created_by, created_at, updated_at, updated_by)
+                OUTPUT INSERTED.id
                 VALUES
-                    (@entityName, @cabinetName, @actor, @now, @now, @actor)
+                    (@entityName, @cabinetName, @entityCode, @entityType, @cabinetCode, @cabinetType, @code, @description, @actor, @now, @now, @actor)
                 """,
                 connection);
             BindPair(command, pair, actor, now);
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            var id = Convert.ToInt32(command.LastInsertedId);
+            var id = SqlStore.InsertedId(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
             return (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                        .FirstOrDefault(mapping => mapping.Id == id)
                    ?? throw new MappingStoreException("The mapping was saved but could not be read back.", new InvalidOperationException());
@@ -88,11 +90,11 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             throw;
         }
-        catch (MySqlException ex) when (ex.Number == 1062)
+        catch (SqlException ex) when (SqlStore.IsDuplicateKey(ex))
         {
-            throw new MappingConflictException("A mapping for this entity and cabinet already exists.");
+            throw new MappingConflictException("A mapping with this code, or for this entity and cabinet, already exists.");
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -104,7 +106,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         Guid userId,
         CancellationToken cancellationToken)
     {
-        var pair = EntityMappingRules.NormalizePair(request.EntityName, request.CabinetName);
+        var pair = Normalize(request);
         var now = DateTime.UtcNow;
         var actor = userId.ToString("D");
         try
@@ -116,12 +118,20 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return null;
             }
 
+            await EnsureConfigsExistAsync(connection, pair, cancellationToken).ConfigureAwait(false);
             await EnsurePairAvailableAsync(connection, pair, id, cancellationToken).ConfigureAwait(false);
-            await using var command = new MySqlCommand(
+            await EnsureCodeAvailableAsync(connection, pair.Code, id, cancellationToken).ConfigureAwait(false);
+            await using var command = new SqlCommand(
                 """
                 UPDATE mapping_table
                 SET entity_name = @entityName,
                     cabinet_name = @cabinetName,
+                    entity_code = @entityCode,
+                    entity_type = @entityType,
+                    cabinet_code = @cabinetCode,
+                    cabinet_type = @cabinetType,
+                    code = @code,
+                    description = @description,
                     updated_at = @now,
                     updated_by = @actor
                 WHERE id = @id
@@ -142,11 +152,11 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             throw;
         }
-        catch (MySqlException ex) when (ex.Number == 1062)
+        catch (SqlException ex) when (SqlStore.IsDuplicateKey(ex))
         {
-            throw new MappingConflictException("A mapping for this entity and cabinet already exists.");
+            throw new MappingConflictException("A mapping with this code, or for this entity and cabinet, already exists.");
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -162,13 +172,13 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return false;
             }
 
-            await using var command = new MySqlCommand(
+            await using var command = new SqlCommand(
                 "DELETE FROM mapping_table WHERE id = @id",
                 connection);
             command.Parameters.AddWithValue("@id", id);
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -200,19 +210,19 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
 
             await EnsureFieldAvailableAsync(connection, mappingId, field.EntityFieldName, exceptId: null, cancellationToken)
                 .ConfigureAwait(false);
-            await using var command = new MySqlCommand(
+            await using var command = new SqlCommand(
                 """
                 INSERT INTO mapping_field
                     (id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
                      entity_type_long, cabinet_type_long, created_by, created_at, updated_at, updated_by)
+                OUTPUT INSERTED.id
                 VALUES
                     (@mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
                      @entityTypeLong, @cabinetTypeLong, @actor, @now, @now, @actor)
                 """,
                 connection);
             BindField(command, mappingId, field, actor, now);
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            var id = Convert.ToInt32(command.LastInsertedId);
+            var id = SqlStore.InsertedId(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
             var mapping = (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(item => item.Id == mappingId);
             return mapping?.Fields.FirstOrDefault(item => item.Id == id);
@@ -221,11 +231,11 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         {
             throw;
         }
-        catch (MySqlException ex) when (ex.Number == 1062)
+        catch (SqlException ex) when (SqlStore.IsDuplicateKey(ex))
         {
             throw new MappingConflictException("A field with this entity field name already exists on the mapping.");
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -241,7 +251,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
                 return false;
             }
 
-            await using var command = new MySqlCommand(
+            await using var command = new SqlCommand(
                 """
                 DELETE FROM mapping_field
                 WHERE id = @id AND id_mapping_table = @mappingId
@@ -251,7 +261,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             command.Parameters.AddWithValue("@mappingId", mappingId);
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
         }
-        catch (MySqlException ex)
+        catch (SqlException ex)
         {
             throw new MappingStoreException(ex.Message, ex);
         }
@@ -263,7 +273,7 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         return list.SchemaReady ? MappingLabels.From(list.Mappings) : MappingLabels.Empty;
     }
 
-    private static async Task RequireSchemaAsync(MySqlConnection connection, CancellationToken cancellationToken)
+    private static async Task RequireSchemaAsync(SqlConnection connection, CancellationToken cancellationToken)
     {
         if (!await SchemaExistsAsync(connection, cancellationToken).ConfigureAwait(false))
         {
@@ -273,13 +283,13 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         }
     }
 
-    private static async Task<bool> SchemaExistsAsync(MySqlConnection connection, CancellationToken cancellationToken)
+    private static async Task<bool> SchemaExistsAsync(SqlConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT COUNT(*)
+            SELECT TOP (1) COUNT(*)
             FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME IN ('mapping_table', 'mapping_field')
             """,
             connection);
@@ -288,16 +298,16 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
     }
 
     private static async Task<IReadOnlyList<EntityMappingDto>> ReadAllAsync(
-        MySqlConnection connection,
+        SqlConnection connection,
         CancellationToken cancellationToken)
     {
         var mappings = new List<EntityMappingDto>();
         var fields = new List<EntityMappingFieldDto>();
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT id, entity_name, cabinet_name
+            SELECT id, entity_name, cabinet_name, entity_code, entity_type, cabinet_code, cabinet_type, code, description
             FROM mapping_table
-            ORDER BY entity_name, cabinet_name, id;
+            ORDER BY code, id;
 
             SELECT id, id_mapping_table, entity_field_name, cabinet_field_name,
                    entity_type_name, cabinet_type_name, entity_type_long, cabinet_type_long
@@ -312,7 +322,13 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             {
                 Id = reader.GetInt32("id"),
                 EntityName = reader.GetString("entity_name"),
-                CabinetName = reader.GetString("cabinet_name")
+                CabinetName = reader.GetString("cabinet_name"),
+                EntityConfigCode = reader.GetString("entity_code"),
+                EntityConfigType = reader.GetString("entity_type"),
+                CabinetConfigCode = reader.GetString("cabinet_code"),
+                CabinetConfigType = reader.GetString("cabinet_type"),
+                Code = reader.GetString("code"),
+                Description = reader.IsDBNull(reader.GetOrdinal("description")) ? null : reader.GetString("description")
             });
         }
 
@@ -332,35 +348,43 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
             });
         }
 
-        return mappings
+            return mappings
             .Select(mapping => new EntityMappingDto
             {
                 Id = mapping.Id,
                 EntityName = mapping.EntityName,
                 CabinetName = mapping.CabinetName,
+                EntityConfigCode = mapping.EntityConfigCode,
+                EntityConfigType = mapping.EntityConfigType,
+                CabinetConfigCode = mapping.CabinetConfigCode,
+                CabinetConfigType = mapping.CabinetConfigType,
+                Code = mapping.Code,
+                Description = mapping.Description,
                 Fields = fields.Where(field => field.MappingId == mapping.Id).ToArray()
             })
             .ToArray();
     }
 
     private static async Task EnsurePairAvailableAsync(
-        MySqlConnection connection,
+        SqlConnection connection,
         NormalizedMapping pair,
         int? exceptId,
         CancellationToken cancellationToken)
     {
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
             SELECT id
             FROM mapping_table
             WHERE entity_name = @entityName
               AND cabinet_name = @cabinetName
+              AND entity_code = @entityCode
+              AND entity_type = @entityType
+              AND cabinet_code = @cabinetCode
+              AND cabinet_type = @cabinetType
               AND (@exceptId IS NULL OR id <> @exceptId)
-            LIMIT 1
             """,
             connection);
-        command.Parameters.AddWithValue("@entityName", pair.EntityName);
-        command.Parameters.AddWithValue("@cabinetName", pair.CabinetName);
+        BindPair(command, pair, actor: string.Empty, now: DateTime.UtcNow);
         command.Parameters.AddWithValue("@exceptId", exceptId.HasValue ? exceptId.Value : DBNull.Value);
         var existing = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (existing is not null and not DBNull)
@@ -369,21 +393,43 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         }
     }
 
+    private static async Task EnsureCodeAvailableAsync(
+        SqlConnection connection,
+        string code,
+        int? exceptId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT id
+            FROM mapping_table
+            WHERE code = @code
+              AND (@exceptId IS NULL OR id <> @exceptId)
+            """,
+            connection);
+        command.Parameters.AddWithValue("@code", code);
+        command.Parameters.AddWithValue("@exceptId", exceptId.HasValue ? exceptId.Value : DBNull.Value);
+        var existing = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (existing is not null and not DBNull)
+        {
+            throw new MappingConflictException("A mapping with this code already exists.");
+        }
+    }
+
     private static async Task EnsureFieldAvailableAsync(
-        MySqlConnection connection,
+        SqlConnection connection,
         int mappingId,
         string entityFieldName,
         int? exceptId,
         CancellationToken cancellationToken)
     {
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT id
+            SELECT TOP (1) id
             FROM mapping_field
             WHERE id_mapping_table = @mappingId
               AND entity_field_name = @entityFieldName
               AND (@exceptId IS NULL OR id <> @exceptId)
-            LIMIT 1
             """,
             connection);
         command.Parameters.AddWithValue("@mappingId", mappingId);
@@ -396,16 +442,67 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         }
     }
 
-    private static void BindPair(MySqlCommand command, NormalizedMapping pair, string actor, DateTime now)
+    private static void BindPair(SqlCommand command, NormalizedMapping pair, string actor, DateTime now)
     {
         command.Parameters.AddWithValue("@entityName", pair.EntityName);
         command.Parameters.AddWithValue("@cabinetName", pair.CabinetName);
+        command.Parameters.AddWithValue("@entityCode", pair.EntityConfig.Code);
+        command.Parameters.AddWithValue("@entityType", pair.EntityConfig.Type);
+        command.Parameters.AddWithValue("@cabinetCode", pair.CabinetConfig.Code);
+        command.Parameters.AddWithValue("@cabinetType", pair.CabinetConfig.Type);
+        command.Parameters.AddWithValue("@code", pair.Code);
+        command.Parameters.AddWithValue("@description", (object?)pair.Description ?? DBNull.Value);
         command.Parameters.AddWithValue("@actor", actor);
         command.Parameters.AddWithValue("@now", now);
     }
 
+    private static NormalizedMapping Normalize(SaveEntityMappingRequest request) =>
+        EntityMappingRules.NormalizePair(
+            request.EntityName,
+            request.CabinetName,
+            request.EntityConfigCode,
+            request.EntityConfigType,
+            request.CabinetConfigCode,
+            request.CabinetConfigType,
+            request.Code,
+            request.Description);
+
+    private static async Task EnsureConfigsExistAsync(
+        SqlConnection connection,
+        NormalizedMapping pair,
+        CancellationToken cancellationToken)
+    {
+        await EnsureConfigExistsAsync(connection, pair.EntityConfig, "Sage configuration", cancellationToken).ConfigureAwait(false);
+        await EnsureConfigExistsAsync(connection, pair.CabinetConfig, "DocuWare configuration", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureConfigExistsAsync(
+        SqlConnection connection,
+        MappingConfigRef config,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT code, type
+                FROM setting
+                WHERE type = @type AND code = @code
+            ) AS configuration
+            """,
+            connection);
+        command.Parameters.AddWithValue("@type", config.Type);
+        command.Parameters.AddWithValue("@code", config.Code);
+        var count = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+        if (count == 0)
+        {
+            throw new ArgumentException($"{label} {config.Code} ({config.Type}) was not found.");
+        }
+    }
+
     private static void BindField(
-        MySqlCommand command,
+        SqlCommand command,
         int mappingId,
         NormalizedMappingField field,
         string actor,
@@ -422,9 +519,9 @@ public sealed class MySqlEntityMappingStore : IEntityMappingStore
         command.Parameters.AddWithValue("@now", now);
     }
 
-    private async Task<MySqlConnection> OpenAsync(CancellationToken cancellationToken)
+    private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)
     {
-        var connection = new MySqlConnection(_connectionString);
+        var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         return connection;
     }

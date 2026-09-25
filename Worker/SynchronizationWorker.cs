@@ -172,6 +172,7 @@ public sealed class SynchronizationWorker : BackgroundService
             claimed.Source,
             claimed.Destination);
         var success = false;
+        var counts = new SynchronizationRunCounts();
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -180,12 +181,21 @@ public sealed class SynchronizationWorker : BackgroundService
                 new SyncCycleRequest
                 {
                     SynchronizationId = id,
+                    RunId = claimed.RunId,
                     Force = true,
                     SageToDocuWare = sageToDocuWare,
                     DocuWareToSage = docuWareToSage
                 },
                 timeoutCts.Token).ConfigureAwait(false);
             success = result.Failed == 0;
+            counts = new SynchronizationRunCounts
+            {
+                TotalRecords = result.Created + result.Updated + result.Skipped + result.Failed,
+                SuccessRecords = result.Created + result.Updated,
+                FailedRecords = result.Failed,
+                SkippedRecords = result.Skipped,
+                ErrorMessage = result.Entities.Select(entity => entity.Error).FirstOrDefault(error => !string.IsNullOrWhiteSpace(error))
+            };
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -193,6 +203,11 @@ public sealed class SynchronizationWorker : BackgroundService
         }
         catch (OperationCanceledException)
         {
+            counts = new SynchronizationRunCounts
+            {
+                FailedRecords = 1,
+                ErrorMessage = $"Exceeded the timeout of {claimed.TimeoutSeconds} seconds."
+            };
             _logger.LogError(
                 "SynchronizationId={SynchronizationId} exceeded the timeout of {TimeoutSeconds} seconds.",
                 id,
@@ -200,6 +215,7 @@ public sealed class SynchronizationWorker : BackgroundService
         }
         catch (Exception ex)
         {
+            counts = new SynchronizationRunCounts { FailedRecords = 1, ErrorMessage = ex.Message };
             _logger.LogError(ex, "SynchronizationId={SynchronizationId} Status=Failed", id);
         }
 
@@ -208,6 +224,7 @@ public sealed class SynchronizationWorker : BackgroundService
             await _synchronizations.CompleteAsync(
                 id,
                 success,
+                counts,
                 TimeSpan.FromSeconds(Math.Max(_options.IntervalSeconds, 1)),
                 TimeSpan.FromSeconds(Math.Max(_options.FirstRetryDelaySeconds, 1)),
                 DateTime.UtcNow,

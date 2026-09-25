@@ -19,6 +19,8 @@ public sealed class SyncCycleRequest
     public bool? SageToDocuWare { get; init; }
 
     public bool? DocuWareToSage { get; init; }
+
+    public Guid? RunId { get; init; }
 }
 
 public sealed class SyncCycleResult
@@ -539,6 +541,18 @@ public sealed class EntityMappingDto
 
     public required string CabinetName { get; init; }
 
+    public required string EntityConfigCode { get; init; }
+
+    public required string EntityConfigType { get; init; }
+
+    public required string CabinetConfigCode { get; init; }
+
+    public required string CabinetConfigType { get; init; }
+
+    public required string Code { get; init; }
+
+    public string? Description { get; init; }
+
     public IReadOnlyList<EntityMappingFieldDto> Fields { get; init; } = [];
 }
 
@@ -566,6 +580,18 @@ public sealed class SaveEntityMappingRequest
     public string? EntityName { get; init; }
 
     public string? CabinetName { get; init; }
+
+    public string? EntityConfigCode { get; init; }
+
+    public string? EntityConfigType { get; init; }
+
+    public string? CabinetConfigCode { get; init; }
+
+    public string? CabinetConfigType { get; init; }
+
+    public string? Code { get; init; }
+
+    public string? Description { get; init; }
 }
 
 public sealed class SynchronizationListDto
@@ -596,6 +622,20 @@ public sealed class SynchronizationRecordDto
     public int TimeoutSeconds { get; init; }
 
     public DateTimeOffset? NextRunAt { get; init; }
+
+    public bool RecurrenceEnabled { get; init; }
+
+    public string? RecurrenceType { get; init; }
+
+    public string? RecurrenceDays { get; init; }
+
+    public string? RecurrenceTime { get; init; }
+
+    public int? IntervalValue { get; init; }
+
+    public string? IntervalUnit { get; init; }
+
+    public string? Timezone { get; init; }
 
     public int RetryCount { get; init; }
 
@@ -660,6 +700,104 @@ public sealed class SaveSynchronizationRequest
     public int? TimeoutSeconds { get; init; }
 
     public DateTimeOffset? NextRunAt { get; init; }
+
+    public bool? RecurrenceEnabled { get; init; }
+
+    public string? RecurrenceType { get; init; }
+
+    public string? RecurrenceDays { get; init; }
+
+    public string? RecurrenceTime { get; init; }
+
+    public int? IntervalValue { get; init; }
+
+    public string? IntervalUnit { get; init; }
+
+    public string? Timezone { get; init; }
+}
+
+public sealed class SynchronizationRunDto
+{
+    public Guid Id { get; init; }
+
+    public int SynchronizationId { get; init; }
+
+    public required string Status { get; init; }
+
+    public DateTimeOffset StartedAt { get; init; }
+
+    public DateTimeOffset? CompletedAt { get; init; }
+
+    public int TotalRecords { get; init; }
+
+    public int ProcessedRecords { get; init; }
+
+    public int SuccessRecords { get; init; }
+
+    public int FailedRecords { get; init; }
+
+    public int SkippedRecords { get; init; }
+
+    public int RetryCount { get; init; }
+
+    public string? ErrorMessage { get; init; }
+
+    public DateTimeOffset CreatedAt { get; init; }
+}
+
+public sealed class SynchronizationRunPageDto
+{
+    public IReadOnlyList<SynchronizationRunDto> Items { get; init; } = [];
+
+    public int Total { get; init; }
+
+    public int Page { get; init; }
+
+    public int PageSize { get; init; }
+}
+
+public sealed class SynchronizationSourceRecordDto
+{
+    public Guid Id { get; init; }
+
+    public int SynchronizationId { get; init; }
+
+    public Guid LastRunId { get; init; }
+
+    public required string SourceRecordId { get; init; }
+
+    public string? SourceBusinessKey { get; init; }
+
+    public string? SourceHash { get; init; }
+
+    public string? DestinationRecordId { get; init; }
+
+    public required string Status { get; init; }
+
+    public int AttemptCount { get; init; }
+
+    public DateTimeOffset? LastAttemptAt { get; init; }
+
+    public DateTimeOffset? LastSuccessAt { get; init; }
+
+    public string? ErrorCode { get; init; }
+
+    public string? ErrorMessage { get; init; }
+
+    public DateTimeOffset CreatedAt { get; init; }
+
+    public DateTimeOffset UpdatedAt { get; init; }
+}
+
+public sealed class SynchronizationSourceRecordPageDto
+{
+    public IReadOnlyList<SynchronizationSourceRecordDto> Items { get; init; } = [];
+
+    public int Total { get; init; }
+
+    public int Page { get; init; }
+
+    public int PageSize { get; init; }
 }
 
 public sealed class SaveEntityMappingFieldRequest

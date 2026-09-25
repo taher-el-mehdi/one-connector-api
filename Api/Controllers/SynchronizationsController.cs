@@ -10,11 +10,16 @@ namespace DocuWareSageConnector.Api.Controllers;
 public sealed class SynchronizationsController : ControllerBase
 {
     private readonly ISynchronizationStore _synchronizations;
+    private readonly ISynchronizationExecutionStore _execution;
     private readonly ISyncWorkQueue _queue;
 
-    public SynchronizationsController(ISynchronizationStore synchronizations, ISyncWorkQueue queue)
+    public SynchronizationsController(
+        ISynchronizationStore synchronizations,
+        ISynchronizationExecutionStore execution,
+        ISyncWorkQueue queue)
     {
         _synchronizations = synchronizations;
+        _execution = execution;
         _queue = queue;
     }
 
@@ -222,6 +227,84 @@ public sealed class SynchronizationsController : ControllerBase
                 new SyncCycleRequest { SynchronizationId = id, Force = true },
                 cancellationToken).ConfigureAwait(false);
             return Accepted(queued);
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("{id:int}/runs")]
+    public async Task<ActionResult<SynchronizationRunPageDto>> GetRuns(
+        int id,
+        [FromQuery] int page = 0,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _execution.ListRunsAsync(id, page, pageSize, cancellationToken).ConfigureAwait(false);
+            return result is null ? NotFound() : Ok(result);
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("{id:int}/runs/{runId:guid}")]
+    public async Task<ActionResult<SynchronizationRunDto>> GetRun(
+        int id,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _execution.GetRunAsync(id, runId, cancellationToken).ConfigureAwait(false);
+            return result is null ? NotFound() : Ok(result);
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("{id:int}/runs/{runId:guid}/records")]
+    public async Task<ActionResult<SynchronizationSourceRecordPageDto>> GetRunRecords(
+        int id,
+        Guid runId,
+        [FromQuery] int page = 0,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? status = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _execution
+                .ListRecordsAsync(id, page, pageSize, status, runId, cancellationToken)
+                .ConfigureAwait(false);
+            return result is null ? NotFound() : Ok(result);
+        }
+        catch (SynchronizationStoreException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("{id:int}/records")]
+    public async Task<ActionResult<SynchronizationSourceRecordPageDto>> GetRecords(
+        int id,
+        [FromQuery] int page = 0,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? status = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _execution
+                .ListRecordsAsync(id, page, pageSize, status, null, cancellationToken)
+                .ConfigureAwait(false);
+            return result is null ? NotFound() : Ok(result);
         }
         catch (SynchronizationStoreException ex)
         {

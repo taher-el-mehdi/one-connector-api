@@ -1,16 +1,16 @@
 using DocuWareSageConnector.Application.Interfaces;
 using DocuWareSageConnector.Domain.Entities;
 using DocuWareSageConnector.Domain.Enums;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
-public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
+public sealed class SqlSyncTrackingStore : ISyncTrackingStore
 {
     private readonly string _connectionString;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public MySqlSyncTrackingStore(IConfiguration configuration)
+    public SqlSyncTrackingStore(IConfiguration configuration)
     {
         _connectionString = ConnectorStoreConnections.RequireConnectionString(configuration);
     }
@@ -24,13 +24,12 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         CancellationToken cancellationToken) =>
         QuerySingleAsync(
             """
-            SELECT id, id_synchronization, status,
-                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
+            SELECT TOP (1) id, id_synchronization, status,
+                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
             FROM logs
-            WHERE CAST(JSON_UNQUOTE(JSON_EXTRACT(file, '$.direction')) AS SIGNED) = @direction
-              AND CAST(JSON_UNQUOTE(JSON_EXTRACT(file, '$.entityType')) AS SIGNED) = @entityType
-              AND JSON_UNQUOTE(JSON_EXTRACT(file, '$.sageNumber')) = @sageNumber
-            LIMIT 1
+            WHERE CAST(JSON_VALUE([file], '$.direction') AS int) = @direction
+              AND CAST(JSON_VALUE([file], '$.entityType') AS int) = @entityType
+              AND JSON_VALUE([file], '$.sageNumber') = @sageNumber
             """,
             command =>
             {
@@ -46,13 +45,12 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         CancellationToken cancellationToken) =>
         QuerySingleAsync(
             """
-            SELECT id, id_synchronization, status,
-                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
+            SELECT TOP (1) id, id_synchronization, status,
+                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
             FROM logs
             WHERE id_synchronization = @synchronizationId
-              AND JSON_UNQUOTE(JSON_EXTRACT(file, '$.sageNumber')) = @sageNumber
+              AND JSON_VALUE([file], '$.sageNumber') = @sageNumber
             ORDER BY updated_at DESC
-            LIMIT 1
             """,
             command =>
             {
@@ -64,11 +62,10 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
     public Task<SyncTrackingRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
         QuerySingleAsync(
             """
-            SELECT id, id_synchronization, status,
-                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
+            SELECT TOP (1) id, id_synchronization, status,
+                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
             FROM logs
             WHERE id = @id
-            LIMIT 1
             """,
             command => command.Parameters.AddWithValue("@id", id.ToString("D")),
             cancellationToken);
@@ -80,13 +77,12 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         CancellationToken cancellationToken) =>
         QuerySingleAsync(
             """
-            SELECT id, id_synchronization, status,
-                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
+            SELECT TOP (1) id, id_synchronization, status,
+                   created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
             FROM logs
-            WHERE CAST(JSON_UNQUOTE(JSON_EXTRACT(file, '$.direction')) AS SIGNED) = @direction
-              AND CAST(JSON_UNQUOTE(JSON_EXTRACT(file, '$.entityType')) AS SIGNED) = @entityType
-              AND CAST(JSON_UNQUOTE(JSON_EXTRACT(file, '$.docuWareDocumentId')) AS SIGNED) = @documentId
-            LIMIT 1
+            WHERE CAST(JSON_VALUE([file], '$.direction') AS int) = @direction
+              AND CAST(JSON_VALUE([file], '$.entityType') AS int) = @entityType
+              AND CAST(JSON_VALUE([file], '$.docuWareDocumentId') AS int) = @documentId
             """,
             command =>
             {
@@ -101,9 +97,9 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await using var command = new MySqlCommand(UpsertSql, connection);
+            await using var command = new SqlCommand(UpsertSql, connection);
             Bind(command, record);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -119,26 +115,26 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         CancellationToken cancellationToken)
     {
         var limit = Math.Clamp(take, 1, 500);
+        // [file] must be bracketed: FILE is reserved in T-SQL.
         var sql = status is null
-            ? $"""
-               SELECT id, id_synchronization, status,
-                      created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
-               FROM logs
-               ORDER BY updated_at DESC
-               LIMIT {limit}
-               """
-            : $"""
-               SELECT id, id_synchronization, status,
-                      created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file
-               FROM logs
-               WHERE status = @status
-               ORDER BY updated_at DESC
-               LIMIT {limit}
-               """;
+            ? """
+              SELECT TOP (@take) id, id_synchronization, status,
+                     created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
+              FROM logs
+              ORDER BY updated_at DESC
+              """
+            : """
+              SELECT TOP (@take) id, id_synchronization, status,
+                     created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file]
+              FROM logs
+              WHERE status = @status
+              ORDER BY updated_at DESC
+              """;
         return QueryManyAsync(
             sql,
             command =>
             {
+                command.Parameters.AddWithValue("@take", limit);
                 if (status is not null)
                 {
                     command.Parameters.AddWithValue("@status", (int)status.Value);
@@ -152,7 +148,7 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
 
     private async Task<SyncTrackingRecord?> QuerySingleAsync(
         string sql,
-        Action<MySqlCommand> bind,
+        Action<SqlCommand> bind,
         CancellationToken cancellationToken)
     {
         var rows = await QueryManyAsync(sql, bind, cancellationToken).ConfigureAwait(false);
@@ -161,12 +157,12 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
 
     private async Task<IReadOnlyList<SyncTrackingRecord>> QueryManyAsync(
         string sql,
-        Action<MySqlCommand> bind,
+        Action<SqlCommand> bind,
         CancellationToken cancellationToken)
     {
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(sql, connection);
+        await using var command = new SqlCommand(sql, connection);
         bind(command);
         var results = new List<SyncTrackingRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -180,24 +176,27 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
 
     private const string UpsertSql =
         """
-        INSERT INTO logs (
+        MERGE logs AS target
+        USING (SELECT @id AS id) AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET
+            id_synchronization = @synchronizationId,
+            status = @status,
+            updated_at = @updatedAt,
+            last_attempt_at = @lastAttemptAt,
+            last_success_at = @lastSuccessAt,
+            retry_count = @retryCount,
+            error_message = @errorMessage,
+            [file] = @file
+        WHEN NOT MATCHED THEN INSERT (
             id, id_synchronization, status,
-            created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, file)
+            created_at, updated_at, last_attempt_at, last_success_at, retry_count, error_message, [file])
         VALUES (
             @id, @synchronizationId, @status,
-            @createdAt, @updatedAt, @lastAttemptAt, @lastSuccessAt, @retryCount, @errorMessage, CAST(@file AS JSON))
-        ON DUPLICATE KEY UPDATE
-            id_synchronization = VALUES(id_synchronization),
-            status = VALUES(status),
-            updated_at = VALUES(updated_at),
-            last_attempt_at = VALUES(last_attempt_at),
-            last_success_at = VALUES(last_success_at),
-            retry_count = VALUES(retry_count),
-            error_message = VALUES(error_message),
-            file = VALUES(file)
+            @createdAt, @updatedAt, @lastAttemptAt, @lastSuccessAt, @retryCount, @errorMessage, @file);
         """;
 
-    private static void Bind(MySqlCommand command, SyncTrackingRecord record)
+    private static void Bind(SqlCommand command, SyncTrackingRecord record)
     {
         command.Parameters.AddWithValue("@id", record.Id.ToString("D"));
         command.Parameters.AddWithValue("@synchronizationId", (object?)record.SynchronizationId ?? DBNull.Value);
@@ -211,7 +210,7 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         command.Parameters.AddWithValue("@file", (object?)record.SerializeFile() ?? DBNull.Value);
     }
 
-    private static SyncTrackingRecord Read(MySqlDataReader reader)
+    private static SyncTrackingRecord Read(SqlDataReader reader)
     {
         var record = new SyncTrackingRecord
         {
@@ -233,16 +232,16 @@ public sealed class MySqlSyncTrackingStore : ISyncTrackingStore
         return record;
     }
 
-    private static string? NullableText(MySqlDataReader reader, string column)
+    private static string? NullableText(SqlDataReader reader, string column)
     {
         var ordinal = reader.GetOrdinal(column);
         return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 
-    private static DateTimeOffset ReadUtc(MySqlDataReader reader, string column) =>
+    private static DateTimeOffset ReadUtc(SqlDataReader reader, string column) =>
         new(DateTime.SpecifyKind(reader.GetDateTime(column), DateTimeKind.Utc));
 
-    private static DateTimeOffset? ReadUtcOrNull(MySqlDataReader reader, string column)
+    private static DateTimeOffset? ReadUtcOrNull(SqlDataReader reader, string column)
     {
         var ordinal = reader.GetOrdinal(column);
         return reader.IsDBNull(ordinal)

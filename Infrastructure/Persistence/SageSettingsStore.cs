@@ -4,7 +4,7 @@ using DocuWareSageConnector.Application.Interfaces;
 using DocuWareSageConnector.Domain.Enums;
 using DocuWareSageConnector.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -101,9 +101,9 @@ public sealed class SageSettingsStore : ISageSettingsStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 foreach (var (key, value) in updates)
@@ -141,11 +141,11 @@ public sealed class SageSettingsStore : ISageSettingsStore
     public async Task<SageFieldRequirements> ReadRequirementsAsync(CancellationToken cancellationToken)
     {
         var flags = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT `key`, `required` FROM setting
+            SELECT [key], [required] FROM setting
             WHERE type = @type AND code = @code
             """,
             connection);
@@ -175,9 +175,9 @@ public sealed class SageSettingsStore : ISageSettingsStore
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await using var command = new MySqlCommand(
+            await using var command = new SqlCommand(
                 """
                 UPDATE setting
                 SET status = @status,
@@ -210,8 +210,8 @@ public sealed class SageSettingsStore : ISageSettingsStore
         !required || !string.IsNullOrEmpty(value);
 
     private static async Task UpsertAsync(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+        SqlConnection connection,
+        SqlTransaction transaction,
         string key,
         string? value,
         string actor,
@@ -220,15 +220,15 @@ public sealed class SageSettingsStore : ISageSettingsStore
         bool status,
         CancellationToken cancellationToken)
     {
-        await using var update = new MySqlCommand(
+        await using var update = new SqlCommand(
             """
             UPDATE setting
-            SET `value` = @value,
+            SET [value] = @value,
                 updated_at = @now,
                 updated_by = @actor,
                 configured = @configured,
                 status = @status
-            WHERE type = @type AND code = @code AND `key` = @key
+            WHERE type = @type AND code = @code AND [key] = @key
             """,
             connection,
             transaction);
@@ -245,10 +245,10 @@ public sealed class SageSettingsStore : ISageSettingsStore
             return;
         }
 
-        await using var insert = new MySqlCommand(
+        await using var insert = new SqlCommand(
             """
             INSERT INTO setting
-                (type, code, description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
+                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
             VALUES
                 (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @configured, @status, 1)
             """,
@@ -267,15 +267,15 @@ public sealed class SageSettingsStore : ISageSettingsStore
     }
 
     private static async Task StampAsync(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+        SqlConnection connection,
+        SqlTransaction transaction,
         string actor,
         DateTime now,
         bool configured,
         bool status,
         CancellationToken cancellationToken)
     {
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
             UPDATE setting
             SET configured = @configured,

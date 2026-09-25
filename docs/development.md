@@ -24,12 +24,6 @@ To run continuous sync locally, set `Synchronization:Enabled` to `true` in `apps
 - SQL Server access to the Sage company database
 - DocuWare Cloud or on-prem Platform user
 
-```powershell
-dotnet test ..\docuware_sage_100_connector.Tests\docuware_sage_100_connector.Tests.csproj
-```
-
-Unit tests mock DocuWare and Sage. They do not need a live environment.
-
 ## Production deployment
 
 - Publish: `dotnet publish -c Release`

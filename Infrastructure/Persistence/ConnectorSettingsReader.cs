@@ -1,13 +1,13 @@
 using System.Globalization;
 using DocuWareSageConnector.Domain.Enums;
 using DocuWareSageConnector.Infrastructure.Configuration;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
 internal static class ConnectorSettingsReader
 {
-    public static Dictionary<string, string?> Read(MySqlConnection connection, byte[] secretsKey)
+    public static Dictionary<string, string?> Read(SqlConnection connection, byte[] secretsKey)
     {
         var (docuWare, sage, synchronization) = ReadOptions(connection, secretsKey);
         return ConnectorConfigurationMap.From(
@@ -18,7 +18,7 @@ internal static class ConnectorSettingsReader
     }
 
     public static void Apply(
-        MySqlConnection connection,
+        SqlConnection connection,
         byte[] secretsKey,
         DocuWareOptions docuWare,
         SageOptions sage,
@@ -58,13 +58,37 @@ internal static class ConnectorSettingsReader
         synchronization.Status = nextSynchronization.Status;
     }
 
+    internal static SageOptions ReadSage(SqlConnection connection, byte[] secretsKey, string code)
+    {
+        var erpMap = ReadMap(connection, SettingTable.Sage, code);
+        if (erpMap.Count == 0)
+        {
+            throw new InvalidOperationException($"Sage configuration '{code}' was not found.");
+        }
+
+        return new SageOptions
+        {
+            Server = Text(erpMap, SettingKeys.ServerName),
+            Database = Text(erpMap, SettingKeys.DatabaseName),
+            Authentication = ParseEnum<SageAuthenticationMode>(
+                Text(erpMap, SettingKeys.AuthentificationMode, SageAuthenticationMode.Windows.ToString()),
+                "ERP authentication"),
+            UserName = Text(erpMap, SettingKeys.UserName),
+            Password = SecretProtector.Unprotect(Optional(erpMap, SettingKeys.PasswordProtected), secretsKey),
+            TrustServerCertificate = Bool(erpMap, SettingKeys.TrustServerCertificate, true),
+            CommandTimeoutSeconds = Int(erpMap, SettingKeys.CommandTimeoutSeconds, 30),
+            SuppliersOnly = Bool(erpMap, SettingKeys.SuppliersOnly, true),
+            ChartOfAccountsTypeZeroOnly = Bool(erpMap, SettingKeys.ChartTypeZeroOnly, true)
+        };
+    }
+
     private static (DocuWareOptions DocuWare, SageOptions Sage, SynchronizationOptions Synchronization) ReadOptions(
-        MySqlConnection connection,
+        SqlConnection connection,
         byte[] secretsKey)
     {
-        var docuWareMap = ReadMap(connection, SettingTable.DocuWare);
-        var erpMap = ReadMap(connection, SettingTable.Sage);
-        var syncMap = ReadMap(connection, SettingTable.Synchronization);
+        var docuWareMap = ReadMap(connection, SettingTable.DocuWare, SettingTable.DocuWare);
+        var erpMap = ReadMap(connection, SettingTable.Sage, SettingTable.Sage);
+        var syncMap = ReadMap(connection, SettingTable.Synchronization, SettingTable.Synchronization);
 
         var docuWare = new DocuWareOptions
         {
@@ -114,17 +138,17 @@ internal static class ConnectorSettingsReader
         return (docuWare, sage, synchronization);
     }
 
-    private static Dictionary<string, string?> ReadMap(MySqlConnection connection, string type)
+    internal static Dictionary<string, string?> ReadMap(SqlConnection connection, string type, string code)
     {
         var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT `key`, `value` FROM setting
+            SELECT [key], [value] FROM setting
             WHERE type = @type AND code = @code
             """,
             connection);
         command.Parameters.AddWithValue("@type", type);
-        command.Parameters.AddWithValue("@code", type);
+        command.Parameters.AddWithValue("@code", code);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -135,13 +159,12 @@ internal static class ConnectorSettingsReader
         return map;
     }
 
-    private static bool Flag(MySqlConnection connection, string type, string column)
+    private static bool Flag(SqlConnection connection, string type, string column)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             $"""
-            SELECT `{column}` FROM setting
+            SELECT [{column}] FROM setting
             WHERE type = @type AND code = @code
-            LIMIT 1
             """,
             connection);
         command.Parameters.AddWithValue("@type", type);

@@ -1,12 +1,18 @@
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
 internal static class MappingFieldSchema
 {
-    public static void Ensure(MySqlConnection connection)
+    public static void Ensure(SqlConnection connection)
     {
-        if (!TableExists(connection, "mapping_field") || ColumnExists(connection, "id_mapping_table"))
+        if (!TableExists(connection, "mapping_field"))
+        {
+            CreateTable(connection);
+            return;
+        }
+
+        if (ColumnExists(connection, "id_mapping_table"))
         {
             return;
         }
@@ -38,32 +44,59 @@ internal static class MappingFieldSchema
         }
     }
 
-    private static void Execute(MySqlConnection connection, string sql)
+    private static void CreateTable(SqlConnection connection)
     {
-        using var command = new MySqlCommand(sql, connection);
+        Execute(
+            connection,
+            """
+            CREATE TABLE [dbo].[mapping_field] (
+                [id]                 INT IDENTITY(1,1) NOT NULL,
+                [id_mapping_table]   INT           NOT NULL,
+                [entity_field_name]  NVARCHAR(256) NOT NULL,
+                [cabinet_field_name] NVARCHAR(256) NOT NULL,
+                [entity_type_name]   NVARCHAR(128) NULL,
+                [cabinet_type_name]  NVARCHAR(128) NULL,
+                [entity_type_long]   INT           NULL,
+                [cabinet_type_long]  INT           NULL,
+                [created_by]         CHAR(36)      NOT NULL CONSTRAINT [df_mapping_field_created_by] DEFAULT '00000000-0000-0000-0000-000000000000',
+                [created_at]         DATETIME2(6)  NOT NULL CONSTRAINT [df_mapping_field_created_at] DEFAULT SYSUTCDATETIME(),
+                [updated_at]         DATETIME2(6)  NOT NULL CONSTRAINT [df_mapping_field_updated_at] DEFAULT SYSUTCDATETIME(),
+                [updated_by]         CHAR(36)      NOT NULL CONSTRAINT [df_mapping_field_updated_by] DEFAULT '00000000-0000-0000-0000-000000000000',
+                CONSTRAINT [pk_mapping_field] PRIMARY KEY CLUSTERED ([id]),
+                CONSTRAINT [uq_oc_mapping_field_entity_field] UNIQUE ([id_mapping_table], [entity_field_name]),
+                CONSTRAINT [fk_mapping_field_table]
+                    FOREIGN KEY ([id_mapping_table]) REFERENCES [dbo].[mapping_table] ([id])
+                    ON DELETE CASCADE
+            )
+            """);
+    }
+
+    private static void Execute(SqlConnection connection, string sql)
+    {
+        using var command = new SqlCommand(sql, connection);
         command.ExecuteNonQuery();
     }
 
-    private static bool TableExists(MySqlConnection connection, string table)
+    private static bool TableExists(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @table
+            WHERE TABLE_CATALOG = DB_NAME() AND TABLE_NAME = @table
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool ColumnExists(MySqlConnection connection, string name)
+    private static bool ColumnExists(SqlConnection connection, string name)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = 'mapping_field'
               AND COLUMN_NAME = @name
             """,
@@ -72,13 +105,13 @@ internal static class MappingFieldSchema
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool ConstraintExists(MySqlConnection connection, string name)
+    private static bool ConstraintExists(SqlConnection connection, string name)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.TABLE_CONSTRAINTS
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = 'mapping_field'
               AND CONSTRAINT_NAME = @name
             """,

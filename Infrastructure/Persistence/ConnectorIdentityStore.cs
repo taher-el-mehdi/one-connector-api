@@ -3,7 +3,7 @@ using System.Text;
 using DocuWareSageConnector.Application.DTOs;
 using DocuWareSageConnector.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -28,7 +28,7 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
             return null;
         }
 
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         string? userId;
@@ -36,12 +36,11 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
         string? displayName;
         string? passwordHash;
         var active = false;
-        await using (var find = new MySqlCommand(
+        await using (var find = new SqlCommand(
             """
-            SELECT id, username, display_name, password_hash, is_active
-            FROM `user`
+            SELECT TOP (1) id, username, display_name, password_hash, is_active
+            FROM [user]
             WHERE username = @username
-            LIMIT 1
             """,
             connection))
         {
@@ -71,9 +70,9 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
 
         var now = DateTime.UtcNow;
         var expires = now.Add(SessionLifetime);
-        await using (var touch = new MySqlCommand(
+        await using (var touch = new SqlCommand(
             """
-            UPDATE `user`
+            UPDATE [user]
             SET last_login_at = @now, updated_at = @now
             WHERE id = @userId
             """,
@@ -97,14 +96,13 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
 
     public async Task<OperatorProfile?> GetProfileAsync(Guid userId, CancellationToken cancellationToken)
     {
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT id, username, display_name, email, is_active, created_at, updated_at, last_login_at
-            FROM `user`
+            SELECT TOP (1) id, username, display_name, email, is_active, created_at, updated_at, last_login_at
+            FROM [user]
             WHERE id = @id AND is_active = 1
-            LIMIT 1
             """,
             connection);
         command.Parameters.AddWithValue("@id", userId.ToString("D"));
@@ -140,14 +138,13 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
             return null;
         }
 
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT id, username
-            FROM `user`
+            SELECT TOP (1) id, username
+            FROM [user]
             WHERE id = @id AND is_active = 1
-            LIMIT 1
             """,
             connection);
         command.Parameters.AddWithValue("@id", userId.Value.ToString("D"));
@@ -173,14 +170,13 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
             return false;
         }
 
-        await using var connection = new MySqlConnection(_connectionString);
+        await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
-            SELECT password_hash
-            FROM `user`
+            SELECT TOP (1) password_hash
+            FROM [user]
             WHERE is_active <> 0 AND (id = @id OR username = @username)
-            LIMIT 1
             """,
             connection);
         command.Parameters.AddWithValue("@id", userId.ToString("D"));
@@ -218,16 +214,16 @@ public sealed class ConnectorIdentityStore : IConnectorIdentity
 
     public Task LogoutAsync(string token, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private static string? ReadText(MySqlDataReader reader, string column)
+    private static string? ReadText(SqlDataReader reader, string column)
     {
         var ordinal = reader.GetOrdinal(column);
         return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 
-    private static DateTimeOffset ReadUtc(MySqlDataReader reader, string column) =>
+    private static DateTimeOffset ReadUtc(SqlDataReader reader, string column) =>
         new(DateTime.SpecifyKind(reader.GetDateTime(column), DateTimeKind.Utc));
 
-    private static DateTimeOffset? ReadUtcOrNull(MySqlDataReader reader, string column)
+    private static DateTimeOffset? ReadUtcOrNull(SqlDataReader reader, string column)
     {
         var ordinal = reader.GetOrdinal(column);
         return reader.IsDBNull(ordinal)

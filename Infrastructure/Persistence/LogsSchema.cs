@@ -1,4 +1,4 @@
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -8,7 +8,7 @@ namespace DocuWareSageConnector.Infrastructure.Persistence;
 /// </summary>
 internal static class LogsSchema
 {
-    public static void Ensure(MySqlConnection connection)
+    public static void Ensure(SqlConnection connection)
     {
         if (!TableExists(connection, "logs"))
         {
@@ -17,7 +17,7 @@ internal static class LogsSchema
 
         EnsureColumn(connection, "id_synchronization", "ALTER TABLE logs ADD COLUMN id_synchronization INT NULL");
         EnsureColumn(connection, "error_message", "ALTER TABLE logs ADD COLUMN error_message TEXT NULL AFTER retry_count");
-        EnsureColumn(connection, "file", "ALTER TABLE logs ADD COLUMN `file` JSON NULL AFTER error_message");
+        EnsureColumn(connection, "file", "ALTER TABLE logs ADD COLUMN [file] JSON NULL AFTER error_message");
 
         if (ColumnExists(connection, "direction")
             || ColumnExists(connection, "entity_type")
@@ -59,7 +59,7 @@ internal static class LogsSchema
         }
     }
 
-    private static void CopyLegacyIntoFile(MySqlConnection connection)
+    private static void CopyLegacyIntoFile(SqlConnection connection)
     {
         var hasLastError = ColumnExists(connection, "last_error");
         var hasDirection = ColumnExists(connection, "direction");
@@ -97,7 +97,7 @@ internal static class LogsSchema
         }
     }
 
-    private static void EnsureColumn(MySqlConnection connection, string column, string alterSql)
+    private static void EnsureColumn(SqlConnection connection, string column, string alterSql)
     {
         if (!ColumnExists(connection, column))
         {
@@ -105,40 +105,40 @@ internal static class LogsSchema
         }
     }
 
-    private static void DropColumnIfExists(MySqlConnection connection, string column)
+    private static void DropColumnIfExists(SqlConnection connection, string column)
     {
         if (ColumnExists(connection, column))
         {
-            Execute(connection, $"ALTER TABLE logs DROP COLUMN `{column}`");
+            Execute(connection, $"ALTER TABLE logs DROP COLUMN [{column}]");
         }
     }
 
-    private static void Execute(MySqlConnection connection, string sql)
+    private static void Execute(SqlConnection connection, string sql)
     {
-        using var command = new MySqlCommand(sql, connection);
+        using var command = new SqlCommand(sql, connection);
         command.ExecuteNonQuery();
     }
 
-    private static bool TableExists(MySqlConnection connection, string table)
+    private static bool TableExists(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @table
+            WHERE TABLE_CATALOG = DB_NAME() AND TABLE_NAME = @table
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool ColumnExists(MySqlConnection connection, string name)
+    private static bool ColumnExists(SqlConnection connection, string name)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = 'logs'
               AND COLUMN_NAME = @name
             """,
@@ -147,28 +147,26 @@ internal static class LogsSchema
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool IndexExists(MySqlConnection connection, string name)
+    private static bool IndexExists(SqlConnection connection, string name)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'logs'
-              AND INDEX_NAME = @name
+            FROM sys.indexes
+            WHERE object_id = OBJECT_ID(N'dbo.logs') AND name = @name
             """,
             connection);
         command.Parameters.AddWithValue("@name", name);
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
     }
 
-    private static bool ConstraintExists(MySqlConnection connection, string name)
+    private static bool ConstraintExists(SqlConnection connection, string name)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT COUNT(*)
             FROM information_schema.TABLE_CONSTRAINTS
-            WHERE TABLE_SCHEMA = DATABASE()
+            WHERE TABLE_CATALOG = DB_NAME()
               AND TABLE_NAME = 'logs'
               AND CONSTRAINT_NAME = @name
             """,

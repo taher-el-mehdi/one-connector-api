@@ -34,9 +34,9 @@ builder.Services.AddConnectorServices(builder.Configuration);
 var app = builder.Build();
 
 app.Logger.LogInformation(
-    "Connector configuration is loaded from MySQL database {Database} on {Host}.",
+    "Connector configuration is loaded from SQL Server database {Database} on {Server}.",
     app.Configuration["ConnectorStore:Database"],
-    app.Configuration["ConnectorStore:Host"]);
+    app.Configuration["ConnectorStore:Server"] ?? app.Configuration["ConnectorStore:Host"]);
 
 if (app.Environment.IsDevelopment())
 {

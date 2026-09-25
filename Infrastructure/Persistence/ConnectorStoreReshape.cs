@@ -1,11 +1,11 @@
 using System.Globalization;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
 internal static class ConnectorStoreReshape
 {
-    public static void Apply(MySqlConnection connection)
+    public static void Apply(SqlConnection connection)
     {
         ReplaceSyncHistory(connection);
         if (!TableExists(connection, "docuware_settings") && !TableExists(connection, "app_users"))
@@ -27,14 +27,14 @@ internal static class ConnectorStoreReshape
         DropLegacy(connection);
     }
 
-    private static void ReplaceSyncHistory(MySqlConnection connection)
+    private static void ReplaceSyncHistory(SqlConnection connection)
     {
         if (!TableExists(connection, "sync_history"))
         {
             return;
         }
 
-        using (var drop = new MySqlCommand("DROP TABLE sync_history", connection))
+        using (var drop = new SqlCommand("DROP TABLE sync_history", connection))
         {
             drop.ExecuteNonQuery();
         }
@@ -44,15 +44,15 @@ internal static class ConnectorStoreReshape
             return;
         }
 
-        using var clear = new MySqlCommand("DELETE FROM logs", connection);
+        using var clear = new SqlCommand("DELETE FROM logs", connection);
         clear.ExecuteNonQuery();
     }
 
-    private static void CopySettings(MySqlConnection connection)
+    private static void CopySettings(SqlConnection connection)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT
+            SELECT TOP (1)
                 d.platform_url,
                 d.organization_name,
                 d.authentication_mode AS docuware_authentication_mode,
@@ -83,7 +83,6 @@ internal static class ConnectorStoreReshape
             INNER JOIN sage_settings AS s ON s.profile_id = p.id
             INNER JOIN synchronization_settings AS y ON y.profile_id = p.id
             WHERE p.is_active = 1
-            LIMIT 1
             """,
             connection);
         using var reader = command.ExecuteReader();
@@ -143,31 +142,26 @@ internal static class ConnectorStoreReshape
         }
     }
 
-    private static void CopyUsers(MySqlConnection connection)
+    private static void CopyUsers(SqlConnection connection)
     {
         var email = ColumnExists(connection, "app_users", "email");
         var sql = email
             ? """
-              INSERT INTO `user` (id, username, password_hash, display_name, email, is_active, created_at, updated_at, last_login_at)
+              INSERT INTO [user] (id, username, password_hash, display_name, email, is_active, created_at, updated_at, last_login_at)
               SELECT id, username, password_hash, display_name, email, is_active, created_at, updated_at, last_login_at
               FROM app_users
               """
             : """
-              INSERT INTO `user` (id, username, password_hash, display_name, email, is_active, created_at, updated_at, last_login_at)
+              INSERT INTO [user] (id, username, password_hash, display_name, email, is_active, created_at, updated_at, last_login_at)
               SELECT id, username, password_hash, display_name, NULL, is_active, created_at, updated_at, last_login_at
               FROM app_users
               """;
-        using var command = new MySqlCommand(sql, connection);
+        using var command = new SqlCommand(sql, connection);
         command.ExecuteNonQuery();
     }
 
-    private static void DropLegacy(MySqlConnection connection)
+    private static void DropLegacy(SqlConnection connection)
     {
-        using (var off = new MySqlCommand("SET FOREIGN_KEY_CHECKS = 0", connection))
-        {
-            off.ExecuteNonQuery();
-        }
-
         foreach (var table in new[]
         {
             "user_sessions",
@@ -181,26 +175,23 @@ internal static class ConnectorStoreReshape
             "app_users"
         })
         {
-            using var drop = new MySqlCommand($"DROP TABLE IF EXISTS `{table}`", connection);
+            using var drop = new SqlCommand($"DROP TABLE IF EXISTS [{table}]", connection);
             drop.ExecuteNonQuery();
         }
-
-        using var on = new MySqlCommand("SET FOREIGN_KEY_CHECKS = 1", connection);
-        on.ExecuteNonQuery();
     }
 
     private static void InsertAll(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+        SqlConnection connection,
+        SqlTransaction transaction,
         string type,
         string description,
         Dictionary<string, string?> values)
     {
         foreach (var (key, value) in values)
         {
-            using var command = new MySqlCommand(
+            using var command = new SqlCommand(
                 """
-                INSERT INTO setting (type, code, description, `key`, `value`)
+                INSERT INTO setting (type, code, description, [key], [value])
                 VALUES (@type, @code, @description, @key, @value)
                 """,
                 connection,
@@ -214,26 +205,24 @@ internal static class ConnectorStoreReshape
         }
     }
 
-    private static bool TableExists(MySqlConnection connection, string table)
+    private static bool TableExists(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT 1 FROM information_schema.tables
-            WHERE table_schema = DATABASE() AND table_name = @name
-            LIMIT 1
+            WHERE TABLE_CATALOG = DB_NAME() AND table_name = @name
             """,
             connection);
         command.Parameters.AddWithValue("@name", table);
         return command.ExecuteScalar() is not null and not DBNull;
     }
 
-    private static bool ColumnExists(MySqlConnection connection, string table, string column)
+    private static bool ColumnExists(SqlConnection connection, string table, string column)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column
-            LIMIT 1
+            SELECT TOP (1) 1 FROM information_schema.columns
+            WHERE TABLE_CATALOG = DB_NAME() AND table_name = @table AND column_name = @column
             """,
             connection);
         command.Parameters.AddWithValue("@table", table);
@@ -241,13 +230,13 @@ internal static class ConnectorStoreReshape
         return command.ExecuteScalar() is not null and not DBNull;
     }
 
-    private static int Count(MySqlConnection connection, string table)
+    private static int Count(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand($"SELECT COUNT(*) FROM `{table}`", connection);
+        using var command = new SqlCommand($"SELECT COUNT(*) FROM [{table}]", connection);
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
-    private static string? NullableText(MySqlDataReader reader, string column)
+    private static string? NullableText(SqlDataReader reader, string column)
     {
         var ordinal = reader.GetOrdinal(column);
         return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

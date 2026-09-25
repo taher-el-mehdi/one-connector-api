@@ -1,5 +1,6 @@
 using DocuWareSageConnector.Application.DTOs;
 using DocuWareSageConnector.Application.Interfaces;
+using DocuWareSageConnector.Application.Synchronization;
 using DocuWareSageConnector.Domain.Entities;
 using DocuWareSageConnector.Domain.Enums;
 using DocuWareSageConnector.Domain.Mapping;
@@ -10,31 +11,42 @@ namespace DocuWareSageConnector.Application.UseCases;
 
 public interface IMappedSageToDocuWareSync
 {
-    Task<EntitySyncResult> ExecuteAsync(int synchronizationId, Guid syncId, bool force, CancellationToken cancellationToken);
+    Task<EntitySyncResult> ExecuteAsync(
+        int synchronizationId,
+        Guid syncId,
+        bool force,
+        Guid? runId,
+        CancellationToken cancellationToken);
 }
 
 public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
 {
     private readonly ISynchronizationStore _synchronizations;
     private readonly IEntityMappingStore _mappings;
+    private readonly SageSourceConnection _sources;
     private readonly SageMappedTableReader _sage;
     private readonly IDocuWareDocumentService _docuWare;
     private readonly ISyncTrackingStore _tracking;
+    private readonly ISynchronizationExecutionStore _records;
     private readonly ILogger<MappedSageToDocuWareSync> _logger;
 
     public MappedSageToDocuWareSync(
         ISynchronizationStore synchronizations,
         IEntityMappingStore mappings,
+        SageSourceConnection sources,
         SageMappedTableReader sage,
         IDocuWareDocumentService docuWare,
         ISyncTrackingStore tracking,
+        ISynchronizationExecutionStore records,
         ILogger<MappedSageToDocuWareSync> logger)
     {
         _synchronizations = synchronizations;
         _mappings = mappings;
+        _sources = sources;
         _sage = sage;
         _docuWare = docuWare;
         _tracking = tracking;
+        _records = records;
         _logger = logger;
     }
 
@@ -42,6 +54,7 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
         int synchronizationId,
         Guid syncId,
         bool force,
+        Guid? runId,
         CancellationToken cancellationToken)
     {
         var job = await _synchronizations.GetAsync(synchronizationId, cancellationToken).ConfigureAwait(false)
@@ -53,10 +66,47 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
             throw new InvalidOperationException($"Mapping '{mapping.EntityName}' has no fields.");
         }
 
-        var keyField = mapping.Fields[0];
-        var rows = await _sage.ReadAsync(
+        var (sourceCode, sourceType) = SynchronizationRules.SplitEndpoint(job.Source);
+        if (!string.Equals(sourceType, "Sage", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Synchronization '{job.Code}' source is not a Sage configuration.");
+        }
+
+        var filters = await _synchronizations.ListFiltersAsync(synchronizationId, cancellationToken).ConfigureAwait(false);
+        var (whereSql, whereParameters) = SynchronizationSourceQuery.Where(filters?.Filters ?? []);
+        var inserted = new HashSet<string>(
+            await _records.ListInsertedSourceIdsAsync(synchronizationId, cancellationToken).ConfigureAwait(false),
+            StringComparer.Ordinal);
+        await using var source = await _sources.OpenAsync(sourceCode, cancellationToken).ConfigureAwait(false);
+        var keyColumns = await _sage.PrimaryKeyAsync(
+            source.Connection,
+            source.CommandTimeoutSeconds,
             mapping.EntityName,
-            mapping.Fields.Select(field => field.EntityFieldName).ToArray(),
+            cancellationToken).ConfigureAwait(false);
+        if (keyColumns.Count == 0)
+        {
+            keyColumns = mapping.Fields.Select(field => field.EntityFieldName).ToArray();
+        }
+
+        var selectColumns = mapping.Fields
+            .Select(field => field.EntityFieldName)
+            .Concat(keyColumns)
+            .ToArray();
+        _logger.LogInformation(
+            "SyncId={SyncId} SynchronizationId={SynchronizationId} MappingId={MappingId} Source={Source} Table={Table} Key={Key} Status=Selecting",
+            syncId,
+            synchronizationId,
+            mapping.Id,
+            source.ConfigurationCode,
+            mapping.EntityName,
+            string.Join(",", keyColumns));
+        var rows = await _sage.ReadAsync(
+            source.Connection,
+            source.CommandTimeoutSeconds,
+            mapping.EntityName,
+            selectColumns,
+            whereSql,
+            whereParameters,
             cancellationToken).ConfigureAwait(false);
 
         var created = 0;
@@ -66,8 +116,14 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var key = ValueConverters.ToText(row.GetValueOrDefault(keyField.EntityFieldName));
+            var key = SourceKey(row, keyColumns);
             if (string.IsNullOrWhiteSpace(key))
+            {
+                skipped++;
+                continue;
+            }
+
+            if (inserted.Contains(key))
             {
                 skipped++;
                 continue;
@@ -94,36 +150,12 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
 
             try
             {
-                var existing = tracking.DocuWareDocumentId is int knownId
-                    ? new DocuWareDocumentInfo { Id = knownId, Fields = [] }
-                    : await _docuWare.FindInCabinetAsync(mapping.CabinetName, keyField.CabinetFieldName, key, cancellationToken)
-                        .ConfigureAwait(false);
-                if (!force && existing is not null && string.Equals(tracking.Fingerprint, fingerprint, StringComparison.Ordinal))
-                {
-                    tracking.Status = SyncStatus.Skipped;
-                    tracking.DocuWareDocumentId = existing.Id;
-                    tracking.ErrorMessage = null;
-                    tracking.UpdatedAt = DateTimeOffset.UtcNow;
-                    await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
-                    skipped++;
-                    continue;
-                }
-
-                if (existing is not null)
-                {
-                    await _docuWare.UpdateCabinetFieldsAsync(mapping.CabinetName, existing.Id, fields, cancellationToken)
-                        .ConfigureAwait(false);
-                    tracking.DocuWareDocumentId = existing.Id;
-                    updated++;
-                }
-                else
-                {
-                    var fileName = Sanitize($"{mapping.EntityName}_{key}.json");
-                    var documentId = await _docuWare.CreateInCabinetAsync(mapping.CabinetName, fileName, fields, cancellationToken)
-                        .ConfigureAwait(false);
-                    tracking.DocuWareDocumentId = documentId;
-                    created++;
-                }
+                var fileName = Sanitize($"{mapping.EntityName}_{key}.json");
+                var documentId = await _docuWare.CreateInCabinetAsync(mapping.CabinetName, fileName, fields, cancellationToken)
+                    .ConfigureAwait(false);
+                tracking.DocuWareDocumentId = documentId;
+                created++;
+                inserted.Add(key);
 
                 tracking.Status = SyncStatus.Completed;
                 tracking.Fingerprint = fingerprint;
@@ -132,6 +164,15 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
                 tracking.RetryCount = 0;
                 tracking.UpdatedAt = DateTimeOffset.UtcNow;
                 await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
+                await WriteRecordAsync(
+                    synchronizationId,
+                    runId,
+                    key,
+                    fingerprint,
+                    tracking.DocuWareDocumentId?.ToString(),
+                    "success",
+                    null,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -141,6 +182,8 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
                 tracking.RetryCount++;
                 tracking.UpdatedAt = DateTimeOffset.UtcNow;
                 await _tracking.UpsertAsync(tracking, cancellationToken).ConfigureAwait(false);
+                await WriteRecordAsync(synchronizationId, runId, key, fingerprint, null, "failed", ex.Message, cancellationToken)
+                    .ConfigureAwait(false);
                 _logger.LogError(ex, "SyncId={SyncId} SynchronizationId={SynchronizationId} Key={Key} Status=Failed", syncId, synchronizationId, key);
             }
         }
@@ -154,6 +197,52 @@ public sealed class MappedSageToDocuWareSync : IMappedSageToDocuWareSync
             Skipped = skipped,
             Failed = failed
         };
+    }
+
+    private static string SourceKey(IReadOnlyDictionary<string, object?> row, IReadOnlyList<string> keyColumns)
+    {
+        var parts = keyColumns
+            .Select(column => ValueConverters.ToText(row.GetValueOrDefault(column)) ?? string.Empty)
+            .ToArray();
+        if (parts.All(string.IsNullOrWhiteSpace))
+        {
+            return string.Empty;
+        }
+
+        var key = string.Join("|", parts);
+        return key.Length <= 128
+            ? key
+            : FieldFingerprint.Compute(new Dictionary<string, object?> { ["key"] = key });
+    }
+
+    private async Task WriteRecordAsync(
+        int synchronizationId,
+        Guid? runId,
+        string key,
+        string? fingerprint,
+        string? destinationId,
+        string status,
+        string? error,
+        CancellationToken cancellationToken)
+    {
+        if (runId is not Guid id || string.IsNullOrWhiteSpace(key))
+        {
+            return;
+        }
+
+        await _records.UpsertRecordAsync(
+            new SynchronizationRecordWrite
+            {
+                SynchronizationId = synchronizationId,
+                RunId = id,
+                SourceRecordId = key,
+                SourceBusinessKey = key,
+                SourceHash = fingerprint,
+                DestinationRecordId = destinationId,
+                Status = status,
+                ErrorMessage = error
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static IReadOnlyList<IndexFieldValue> MapFields(

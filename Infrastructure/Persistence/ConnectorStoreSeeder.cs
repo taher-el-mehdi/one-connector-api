@@ -1,54 +1,22 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using DocuWareSageConnector.Infrastructure.Configuration;
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
 internal static class ConnectorStoreSeeder
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    public static void EnsureSeeded(SqlConnection connection)
     {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true,
-        Converters = { new JsonStringEnumConverter() }
-    };
-
-    public static void EnsureSeeded(MySqlConnection connection, byte[] secretsKey, string contentRoot)
-    {
-        var settingsReady = HasSettings(connection);
-        var userCount = CountUsers(connection);
-        if (settingsReady && userCount > 0)
+        if (HasSettings(connection))
         {
             return;
         }
 
-        var seedPath = Path.Combine(contentRoot, "Database", "seed.local.json");
-        if (!File.Exists(seedPath))
-        {
-            throw new InvalidOperationException(
-                settingsReady
-                    ? "The connector store has no operator account. Add an Operator section to Database/seed.local.json and start the API again."
-                    : "The connector store has no settings. Add Database/seed.local.json and start the API again. The file is imported once and is not committed.");
-        }
-
-        var document = JsonSerializer.Deserialize<SeedDocument>(File.ReadAllText(seedPath), JsonOptions)
-            ?? throw new InvalidOperationException("Database/seed.local.json is empty.");
-
         using var transaction = connection.BeginTransaction();
         try
         {
-            if (!settingsReady)
-            {
-                InsertSettings(connection, transaction, secretsKey, document);
-            }
-
-            if (userCount == 0)
-            {
-                InsertOperator(connection, transaction, document.Operator);
-            }
-
+            InsertGroup(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingTemplates.For(SettingTable.DocuWare));
+            InsertGroup(connection, transaction, SettingTable.Sage, "Sage", SettingTemplates.For(SettingTable.Sage));
+            InsertGroup(connection, transaction, SettingTable.Synchronization, "Synchronization", SynchronizationDefaults);
             transaction.Commit();
         }
         catch
@@ -58,183 +26,46 @@ internal static class ConnectorStoreSeeder
         }
     }
 
-    private static void InsertSettings(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
-        byte[] secretsKey,
-        SeedDocument document)
-    {
-        var docuWare = document.DocuWare ?? throw new InvalidOperationException("Database/seed.local.json must include DocuWare.");
-        var sage = document.Sage ?? throw new InvalidOperationException("Database/seed.local.json must include Sage.");
-        var synchronization = document.Synchronization ?? throw new InvalidOperationException("Database/seed.local.json must include Synchronization.");
-        docuWare.FileCabinets ??= new DocuWareFileCabinetsOptions();
-        Validate(docuWare, sage, synchronization, document.Tracking ?? new TrackingOptions());
+    private static readonly (string Key, string? Value)[] SynchronizationDefaults =
+    [
+        (SettingKeys.Enabled, "false"),
+        (SettingKeys.IntervalSeconds, "30"),
+        (SettingKeys.MaxRetries, "3"),
+        (SettingKeys.FirstRetryDelaySeconds, "2"),
+        (SettingKeys.InsertMissingInSage, "false"),
+        (SettingKeys.ApplySageWrites, "true"),
+        (SettingKeys.SageToDocuWare, "true"),
+        (SettingKeys.DocuWareToSage, "true")
+    ];
 
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.PlatformUrl, docuWare.PlatformUrl);
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.Organization, docuWare.Organization ?? string.Empty);
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.AuthenticationMode, docuWare.AuthenticationMode.ToString());
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.UserName, docuWare.UserName ?? string.Empty);
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.PasswordProtected, SecretProtector.Protect(docuWare.Password, secretsKey));
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.ClientId, docuWare.ClientId ?? string.Empty);
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.ClientSecretProtected, SecretProtector.Protect(docuWare.ClientSecret, secretsKey));
-        InsertSetting(connection, transaction, SettingTable.DocuWare, "DocuWare", SettingKeys.Scope, string.IsNullOrWhiteSpace(docuWare.Scope) ? "docuware.platform openid" : docuWare.Scope);
-
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.ServerName, sage.Server);
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.DatabaseName, sage.Database);
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.AuthentificationMode, sage.Authentication.ToString());
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.UserName, sage.UserName ?? string.Empty);
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.PasswordProtected, SecretProtector.Protect(sage.Password, secretsKey));
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.TrustServerCertificate, sage.TrustServerCertificate ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.CommandTimeoutSeconds, sage.CommandTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.SuppliersOnly, sage.SuppliersOnly ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Sage, "Sage", SettingKeys.ChartTypeZeroOnly, sage.ChartOfAccountsTypeZeroOnly ? "true" : "false");
-
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.Enabled, synchronization.Enabled ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.IntervalSeconds, synchronization.IntervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.MaxRetries, synchronization.MaxRetries.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.FirstRetryDelaySeconds, synchronization.FirstRetryDelaySeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.InsertMissingInSage, synchronization.InsertMissingInSage ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.ApplySageWrites, synchronization.ApplySageWrites ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.SageToDocuWare, synchronization.SageToDocuWare ? "true" : "false");
-        InsertSetting(connection, transaction, SettingTable.Synchronization, "Synchronization", SettingKeys.DocuWareToSage, synchronization.DocuWareToSage ? "true" : "false");
-    }
-
-    private static void InsertSetting(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+    private static void InsertGroup(
+        SqlConnection connection,
+        SqlTransaction transaction,
         string type,
         string description,
-        string key,
-        string? value)
+        IReadOnlyList<(string Key, string? Value)> rows)
     {
-        Execute(
-            connection,
-            transaction,
-            """
-            INSERT INTO setting (type, code, description, `key`, `value`)
-            VALUES (@type, @code, @description, @key, @value)
-            """,
-            command =>
-            {
-                command.Parameters.AddWithValue("@type", type);
-                command.Parameters.AddWithValue("@code", type);
-                command.Parameters.AddWithValue("@description", description);
-                command.Parameters.AddWithValue("@key", key);
-                command.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
-            });
-    }
-
-    private static void InsertOperator(MySqlConnection connection, MySqlTransaction transaction, SeedOperator? op)
-    {
-        if (op is null || string.IsNullOrWhiteSpace(op.Username) || string.IsNullOrEmpty(op.Password))
+        foreach (var (key, value) in rows)
         {
-            throw new InvalidOperationException("Database/seed.local.json Operator needs Username and Password.");
-        }
-
-        var username = op.Username.Trim();
-        var email = string.IsNullOrWhiteSpace(op.Email) ? null : op.Email.Trim();
-        if (username.Length > 128 || op.Password.Length < 8 || op.Password.Length > 256)
-        {
-            throw new InvalidOperationException("Operator username must be at most 128 characters and the password 8 to 256 characters.");
-        }
-
-        if (email is { Length: > 256 })
-        {
-            throw new InvalidOperationException("Operator e-mail must be at most 256 characters.");
-        }
-
-        var now = DateTime.UtcNow;
-        Execute(
-            connection,
-            transaction,
-            """
-            INSERT INTO `user` (id, username, password_hash, display_name, email, is_active, created_at, updated_at)
-            VALUES (@id, @username, @passwordHash, @displayName, @email, 1, @now, @now)
-            """,
-            command =>
-            {
-                command.Parameters.AddWithValue("@id", Guid.NewGuid().ToString("D"));
-                command.Parameters.AddWithValue("@username", username);
-                command.Parameters.AddWithValue("@passwordHash", OperatorPasswordHasher.Hash(op.Password));
-                command.Parameters.AddWithValue("@displayName", string.IsNullOrWhiteSpace(op.DisplayName) ? DBNull.Value : op.DisplayName.Trim());
-                command.Parameters.AddWithValue("@email", email is null ? DBNull.Value : email);
-                command.Parameters.AddWithValue("@now", now);
-            });
-    }
-
-    private static void Validate(
-        DocuWareOptions docuWare,
-        SageOptions sage,
-        SynchronizationOptions synchronization,
-        TrackingOptions tracking)
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(ConnectorConfigurationMap.From(docuWare, sage, synchronization, tracking))
-            .Build();
-        var validator = new ConnectorOptionsValidator(configuration);
-        var failures = new List<string>();
-        Collect(validator.Validate(null, docuWare), failures);
-        Collect(validator.Validate(null, sage), failures);
-        Collect(validator.Validate(null, synchronization), failures);
-        Collect(validator.Validate(null, tracking), failures);
-        if (failures.Count > 0)
-        {
-            throw new InvalidOperationException("Database/seed.local.json is not valid. " + string.Join(" ", failures));
+            using var command = new SqlCommand(
+                """
+                INSERT INTO setting (type, code, description, [key], [value])
+                VALUES (@type, @code, @description, @key, @value)
+                """,
+                connection,
+                transaction);
+            command.Parameters.AddWithValue("@type", type);
+            command.Parameters.AddWithValue("@code", type);
+            command.Parameters.AddWithValue("@description", description);
+            command.Parameters.AddWithValue("@key", key);
+            command.Parameters.AddWithValue("@value", value is null ? DBNull.Value : value);
+            command.ExecuteNonQuery();
         }
     }
 
-    private static void Collect(Microsoft.Extensions.Options.ValidateOptionsResult result, List<string> failures)
+    private static bool HasSettings(SqlConnection connection)
     {
-        if (result.Failed && result.Failures is not null)
-        {
-            failures.AddRange(result.Failures);
-        }
-    }
-
-    private static bool HasSettings(MySqlConnection connection)
-    {
-        using var command = new MySqlCommand("SELECT COUNT(*) FROM setting", connection);
+        using var command = new SqlCommand("SELECT COUNT(*) FROM setting", connection);
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
-    }
-
-    private static int CountUsers(MySqlConnection connection)
-    {
-        using var command = new MySqlCommand("SELECT COUNT(*) FROM `user`", connection);
-        return Convert.ToInt32(command.ExecuteScalar());
-    }
-
-    private static void Execute(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
-        string sql,
-        Action<MySqlCommand> bind)
-    {
-        using var command = new MySqlCommand(sql, connection, transaction);
-        bind(command);
-        command.ExecuteNonQuery();
-    }
-
-    private sealed class SeedDocument
-    {
-        public SeedOperator? Operator { get; set; }
-
-        public DocuWareOptions? DocuWare { get; set; }
-
-        public SageOptions? Sage { get; set; }
-
-        public SynchronizationOptions? Synchronization { get; set; }
-
-        public TrackingOptions? Tracking { get; set; }
-    }
-
-    private sealed class SeedOperator
-    {
-        public string Username { get; set; } = string.Empty;
-
-        public string Password { get; set; } = string.Empty;
-
-        public string? DisplayName { get; set; }
-
-        public string? Email { get; set; }
     }
 }

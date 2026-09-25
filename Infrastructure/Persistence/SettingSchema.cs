@@ -1,10 +1,10 @@
-using MySqlConnector;
+using Microsoft.Data.SqlClient;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
 internal static class SettingSchema
 {
-    public static void MigrateLegacy(MySqlConnection connection)
+    public static void MigrateLegacy(SqlConnection connection)
     {
         Copy(connection, "setting_docuware", SettingTable.DocuWare);
         Copy(connection, "setting_erp", SettingTable.Sage);
@@ -14,24 +14,24 @@ internal static class SettingSchema
         Drop(connection, "setting_synchronization");
     }
 
-    private static void Copy(MySqlConnection connection, string source, string type)
+    private static void Copy(SqlConnection connection, string source, string type)
     {
         if (!TableExists(connection, source) || !TableExists(connection, SettingTable.Name))
         {
             return;
         }
 
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             $"""
             INSERT INTO setting
-                (type, code, description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`)
-            SELECT @type, @code, @description, `key`, `value`, created_by, created_at, updated_at, updated_by, configured, status, `required`
-            FROM `{source}` AS source
+                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
+            SELECT @type, @code, @description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required]
+            FROM [{source}] AS source
             WHERE NOT EXISTS (
                 SELECT 1 FROM setting AS target
                 WHERE target.type = @type
                   AND target.code = @code
-                  AND target.`key` = source.`key`
+                  AND target.[key] = source.[key]
             )
             """,
             connection);
@@ -48,24 +48,23 @@ internal static class SettingSchema
         _ => "Synchronization"
     };
 
-    private static void Drop(MySqlConnection connection, string table)
+    private static void Drop(SqlConnection connection, string table)
     {
         if (!TableExists(connection, table))
         {
             return;
         }
 
-        using var command = new MySqlCommand($"DROP TABLE `{table}`", connection);
+        using var command = new SqlCommand($"DROP TABLE [{table}]", connection);
         command.ExecuteNonQuery();
     }
 
-    private static bool TableExists(MySqlConnection connection, string table)
+    private static bool TableExists(SqlConnection connection, string table)
     {
-        using var command = new MySqlCommand(
+        using var command = new SqlCommand(
             """
             SELECT 1 FROM information_schema.tables
-            WHERE table_schema = DATABASE() AND table_name = @name
-            LIMIT 1
+            WHERE TABLE_CATALOG = DB_NAME() AND table_name = @name
             """,
             connection);
         command.Parameters.AddWithValue("@name", table);

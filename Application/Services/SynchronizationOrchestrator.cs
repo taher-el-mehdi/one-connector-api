@@ -42,7 +42,7 @@ public sealed class SynchronizationOrchestrator : ISynchronizationOrchestrator
                 results.Add(await RunDirectionAsync(
                     EntityType.Supplier,
                     SyncDirection.SageToDocuWare,
-                    () => _mappedSageToDocuWare.ExecuteAsync(synchronizationId, syncId, request.Force, cancellationToken),
+                    () => _mappedSageToDocuWare.ExecuteAsync(synchronizationId, syncId, request.Force, request.RunId, cancellationToken),
                     syncId).ConfigureAwait(false));
             }
 

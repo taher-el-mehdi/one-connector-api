@@ -45,15 +45,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IResilienceExecutor, ResilienceExecutor>();
         services.AddSingleton<IDocuWareDocumentService, DocuWareDocumentService>();
         services.AddSingleton<ISageSqlConnectionFactory, SageSqlConnectionFactory>();
-        services.AddSingleton<IEntityMappingStore, MySqlEntityMappingStore>();
+        services.AddSingleton<IEntityMappingStore, SqlEntityMappingStore>();
         services.AddSingleton<SageMappingRelocation>();
         services.AddHostedService<SageMappingRelocationService>();
         services.AddSingleton<SageSchemaReader>();
+        services.AddSingleton<SageSourceConnection>();
         services.AddSingleton<SageMappedTableReader>();
         services.AddScoped<IMappedSageToDocuWareSync, MappedSageToDocuWareSync>();
         services.AddSingleton<SageQueryCatalog>();
         services.AddSingleton<ISageRepositoryFactory, SageRepositoryFactory>();
-        services.AddSingleton<ISyncTrackingStore, MySqlSyncTrackingStore>();
+        services.AddSingleton<ISyncTrackingStore, SqlSyncTrackingStore>();
         services.AddSingleton<ISyncWorkQueue, SyncWorkQueue>();
         services.AddSingleton<ISyncStatusSnapshot, SyncStatusSnapshot>();
         services.AddScoped<ISageToDocuWareSyncUseCase, SageToDocuWareSyncUseCase>();
@@ -66,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISynchronizationSettingsStore, SynchronizationSettingsStore>();
         services.AddSingleton<IConfigurationCatalog, ConfigurationCatalogStore>();
         services.AddSingleton<ISynchronizationStore, SynchronizationStore>();
+        services.AddSingleton<ISynchronizationExecutionStore, SynchronizationExecutionStore>();
         services.AddAuthentication(ConnectorSessionDefaults.Scheme)
             .AddScheme<AuthenticationSchemeOptions, SessionTokenAuthenticationHandler>(
                 ConnectorSessionDefaults.Scheme,

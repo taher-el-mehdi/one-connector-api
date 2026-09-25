@@ -2,7 +2,6 @@ using DocuWareSageConnector.Infrastructure.Configuration;
 using DocuWareSageConnector.Sage.Sql;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
-using MySqlConnector;
 
 namespace DocuWareSageConnector.Infrastructure.Persistence;
 
@@ -61,7 +60,15 @@ public sealed class SageMappingRelocation
     {
         await using var sage = _sageConnections.Create();
         sage.Open();
-        var tableId = await ScalarAsync(sage, "SELECT OBJECT_ID(N'dbo.mapping_table', N'U')", cancellationToken)
+        if (await SameAsConnectorStoreAsync(sage, cancellationToken).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Skipping Sage mapping cleanup because Sage is the connector store database {Database}.",
+                sage.Database);
+            return;
+        }
+
+        var tableId = await ScalarAsync(sage, "SELECT TOP (1) OBJECT_ID(N'dbo.mapping_table', N'U')", cancellationToken)
             .ConfigureAwait(false);
         var fieldId = await ScalarAsync(sage, "SELECT OBJECT_ID(N'dbo.mapping_field', N'U')", cancellationToken)
             .ConfigureAwait(false);
@@ -83,13 +90,57 @@ public sealed class SageMappingRelocation
 
         if (tableId is not null)
         {
+            await DropForeignKeysReferencingAsync(sage, "mapping_table", cancellationToken).ConfigureAwait(false);
             await ExecuteAsync(sage, "DROP TABLE dbo.mapping_table", cancellationToken).ConfigureAwait(false);
         }
 
         _logger.LogInformation(
-            "Removed mapping_table and mapping_field from Sage database {Database} after copying {Count} mappings into MySQL.",
+            "Removed mapping_table and mapping_field from Sage database {Database} after copying {Count} mappings into the connector store.",
             _options.Database,
             copied);
+    }
+
+    private async Task<bool> SameAsConnectorStoreAsync(SqlConnection sage, CancellationToken cancellationToken)
+    {
+        await using var store = new SqlConnection(_connectionString);
+        await store.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return string.Equals(sage.DataSource, store.DataSource, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(sage.Database, store.Database, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task DropForeignKeysReferencingAsync(
+        SqlConnection connection,
+        string referencedTable,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT OBJECT_SCHEMA_NAME(fk.parent_object_id) AS parent_schema,
+                   OBJECT_NAME(fk.parent_object_id) AS parent_table,
+                   fk.name AS constraint_name
+            FROM sys.foreign_keys AS fk
+            INNER JOIN sys.tables AS referenced ON referenced.object_id = fk.referenced_object_id
+            WHERE referenced.name = @table
+            """;
+        command.Parameters.AddWithValue("@table", referencedTable);
+        command.CommandTimeout = _options.CommandTimeoutSeconds;
+        var keys = new List<(string Schema, string Table, string Constraint)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                keys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+        }
+
+        foreach (var (schema, table, constraint) in keys)
+        {
+            await ExecuteAsync(
+                    connection,
+                    $"ALTER TABLE [{schema}].[{table}] DROP CONSTRAINT [{constraint}]",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
     }
 
     private async Task<int> CopyAsync(SqlConnection sage, bool includeFields, CancellationToken cancellationToken)
@@ -130,11 +181,11 @@ public sealed class SageMappingRelocation
             }
         }
 
-        await using var mysql = new MySqlConnection(_connectionString);
+        await using var mysql = new SqlConnection(_connectionString);
         await mysql.OpenAsync(cancellationToken).ConfigureAwait(false);
         var actor = await FirstUserAsync(mysql, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
-        await using var transaction = await mysql.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqlTransaction)await mysql.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var mapping in mappings)
         {
             var id = await InsertMappingAsync(mysql, transaction, mapping, actor, now, cancellationToken)
@@ -151,19 +202,18 @@ public sealed class SageMappingRelocation
     }
 
     private static async Task<int> InsertMappingAsync(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+        SqlConnection connection,
+        SqlTransaction transaction,
         SageMappingRow mapping,
         string actor,
         DateTime now,
         CancellationToken cancellationToken)
     {
-        await using var existing = new MySqlCommand(
+        await using var existing = new SqlCommand(
             """
             SELECT id
             FROM mapping_table
             WHERE entity_name = @entityName AND cabinet_name = @cabinetName
-            LIMIT 1
             """,
             connection,
             transaction);
@@ -175,38 +225,42 @@ public sealed class SageMappingRelocation
             return Convert.ToInt32(found);
         }
 
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
             INSERT INTO mapping_table
-                (entity_name, cabinet_name, created_by, created_at, updated_at, updated_by)
+                (entity_name, cabinet_name, entity_code, entity_type, cabinet_code, cabinet_type, code, created_by, created_at, updated_at, updated_by)
+            OUTPUT INSERTED.id
             VALUES
-                (@entityName, @cabinetName, @actor, @now, @now, @actor)
+                (@entityName, @cabinetName, @entityCode, @entityType, @cabinetCode, @cabinetType, @code, @actor, @now, @now, @actor)
             """,
             connection,
             transaction);
         command.Parameters.AddWithValue("@entityName", mapping.EntityName);
         command.Parameters.AddWithValue("@cabinetName", mapping.CabinetName);
+        command.Parameters.AddWithValue("@entityCode", "Sage");
+        command.Parameters.AddWithValue("@entityType", "Sage");
+        command.Parameters.AddWithValue("@cabinetCode", "Docuware");
+        command.Parameters.AddWithValue("@cabinetType", "Docuware");
+        command.Parameters.AddWithValue("@code", $"MAP-{mapping.Id}");
         command.Parameters.AddWithValue("@actor", actor);
         command.Parameters.AddWithValue("@now", now);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        return Convert.ToInt32(command.LastInsertedId);
+        return SqlStore.InsertedId(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
     }
 
     private static async Task InsertFieldAsync(
-        MySqlConnection connection,
-        MySqlTransaction transaction,
+        SqlConnection connection,
+        SqlTransaction transaction,
         int mappingId,
         SageFieldRow field,
         string actor,
         DateTime now,
         CancellationToken cancellationToken)
     {
-        await using var existing = new MySqlCommand(
+        await using var existing = new SqlCommand(
             """
-            SELECT id
+            SELECT TOP (1) id
             FROM mapping_field
             WHERE id_mapping_table = @mappingId AND entity_field_name = @entityFieldName
-            LIMIT 1
             """,
             connection,
             transaction);
@@ -215,7 +269,7 @@ public sealed class SageMappingRelocation
         var found = await existing.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (found is not null and not DBNull)
         {
-            await using var update = new MySqlCommand(
+            await using var update = new SqlCommand(
                 """
                 UPDATE mapping_field
                 SET cabinet_field_name = @cabinetFieldName,
@@ -241,7 +295,7 @@ public sealed class SageMappingRelocation
             return;
         }
 
-        await using var command = new MySqlCommand(
+        await using var command = new SqlCommand(
             """
             INSERT INTO mapping_field
                 (id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
@@ -264,10 +318,10 @@ public sealed class SageMappingRelocation
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<string> FirstUserAsync(MySqlConnection connection, CancellationToken cancellationToken)
+    private static async Task<string> FirstUserAsync(SqlConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = new MySqlCommand(
-            "SELECT id FROM `user` WHERE is_active = 1 ORDER BY created_at LIMIT 1",
+        await using var command = new SqlCommand(
+            "SELECT TOP (1) id FROM [user] WHERE is_active = 1 ORDER BY created_at",
             connection);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         var id = value is null or DBNull ? null : Convert.ToString(value);
