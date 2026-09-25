@@ -22,8 +22,6 @@ public sealed class DocuWareOptions
 
     public string Scope { get; set; } = "docuware.platform openid";
 
-    public bool Configured { get; set; }
-
     public bool Status { get; set; }
 
     public DocuWareFileCabinetsOptions FileCabinets { get; set; } = new();
@@ -76,8 +74,6 @@ public sealed class SageOptions
 
     public bool ChartOfAccountsTypeZeroOnly { get; set; } = true;
 
-    public bool Configured { get; set; }
-
     public bool Status { get; set; }
 }
 
@@ -100,8 +96,6 @@ public sealed class SynchronizationOptions
     public bool SageToDocuWare { get; set; } = true;
 
     public bool DocuWareToSage { get; set; } = true;
-
-    public bool Configured { get; set; }
 
     public bool Status { get; set; }
 }

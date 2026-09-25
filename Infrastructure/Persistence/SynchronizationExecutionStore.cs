@@ -42,12 +42,11 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
 
             await using var command = new SqlCommand(
                 """
-                SELECT id, synchronization_id, status, started_at, completed_at,
-                       total_records, processed_records, success_records, failed_records, skipped_records,
-                       retry_count, error_message, created_at
+                SELECT id, synchronization_id, status, start_at, completed_at,
+                       records_inserted, records_updated, error_message, created_at
                 FROM synchronization_run
                 WHERE synchronization_id = @synchronizationId
-                ORDER BY started_at DESC, created_at DESC, id DESC
+                ORDER BY start_at DESC, created_at DESC, id DESC
                 OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
                 """,
                 connection);
@@ -90,9 +89,8 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
 
             await using var command = new SqlCommand(
                 """
-                SELECT id, synchronization_id, status, started_at, completed_at,
-                       total_records, processed_records, success_records, failed_records, skipped_records,
-                       retry_count, error_message, created_at
+                SELECT id, synchronization_id, status, start_at, completed_at,
+                       records_inserted, records_updated, error_message, created_at
                 FROM synchronization_run
                 WHERE synchronization_id = @synchronizationId AND id = @runId
                 """,
@@ -111,50 +109,40 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
     public async Task UpsertRecordAsync(SynchronizationRecordWrite record, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
-        var sourceId = Trim(record.SourceRecordId, 128);
-        var success = string.Equals(record.Status, "success", StringComparison.OrdinalIgnoreCase);
+        var entityId = Trim(record.EntityId, 512);
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            throw new ArgumentException("Entity id is required.");
+        }
+
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await using var command = new SqlCommand(
                 """
                 MERGE synchronization_record AS target
-                USING (SELECT @synchronizationId AS synchronization_id, @sourceRecordId AS source_record_id) AS source
+                USING (SELECT @synchronizationId AS synchronization_id, @entityId AS entity_id) AS source
                    ON target.synchronization_id = source.synchronization_id
-                  AND target.source_record_id = source.source_record_id
+                  AND target.entity_id = source.entity_id
                 WHEN MATCHED THEN
                     UPDATE SET
                         last_run_id = @runId,
-                        source_business_key = @businessKey,
-                        source_hash = @sourceHash,
-                        destination_record_id = @destinationRecordId,
-                        status = @status,
-                        attempt_count = target.attempt_count + 1,
-                        last_attempt_at = @now,
-                        last_success_at = CASE WHEN @success = 1 THEN @now ELSE target.last_success_at END,
-                        error_message = @errorMessage,
+                        docuware_id = @docuwareId,
+                        error = @error,
                         updated_at = @now
                 WHEN NOT MATCHED THEN
                     INSERT (
-                        synchronization_id, last_run_id, source_record_id, source_business_key, source_hash,
-                        destination_record_id, status, attempt_count, last_attempt_at, last_success_at,
-                        error_message, created_at, updated_at)
+                        synchronization_id, last_run_id, entity_id, docuware_id, error, created_at, updated_at)
                     VALUES (
-                        @synchronizationId, @runId, @sourceRecordId, @businessKey, @sourceHash,
-                        @destinationRecordId, @status, 1, @now, CASE WHEN @success = 1 THEN @now ELSE NULL END,
-                        @errorMessage, @now, @now);
+                        @synchronizationId, @runId, @entityId, @docuwareId, @error, @now, @now);
                 """,
                 connection);
             command.Parameters.AddWithValue("@synchronizationId", record.SynchronizationId);
             command.Parameters.AddWithValue("@runId", record.RunId);
-            command.Parameters.AddWithValue("@sourceRecordId", sourceId);
-            command.Parameters.AddWithValue("@businessKey", (object?)Trim(record.SourceBusinessKey, 256) ?? DBNull.Value);
-            command.Parameters.AddWithValue("@sourceHash", (object?)Trim(record.SourceHash, 128) ?? DBNull.Value);
-            command.Parameters.AddWithValue("@destinationRecordId", (object?)Trim(record.DestinationRecordId, 128) ?? DBNull.Value);
-            command.Parameters.AddWithValue("@status", record.Status);
+            command.Parameters.AddWithValue("@entityId", entityId);
+            command.Parameters.AddWithValue("@docuwareId", (object?)Trim(record.DocuWareId, 128) ?? DBNull.Value);
+            command.Parameters.AddWithValue("@error", (object?)record.Error ?? DBNull.Value);
             command.Parameters.AddWithValue("@now", now);
-            command.Parameters.AddWithValue("@success", success ? 1 : 0);
-            command.Parameters.AddWithValue("@errorMessage", (object?)record.ErrorMessage ?? DBNull.Value);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (SqlException ex)
@@ -163,7 +151,7 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
         }
     }
 
-    public async Task<IReadOnlySet<string>> ListInsertedSourceIdsAsync(
+    public async Task<IReadOnlySet<string>> ListInsertedEntityIdsAsync(
         int synchronizationId,
         CancellationToken cancellationToken)
     {
@@ -172,11 +160,10 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             await using var command = new SqlCommand(
                 """
-                SELECT source_record_id
+                SELECT entity_id
                 FROM synchronization_record
                 WHERE synchronization_id = @synchronizationId
-                  AND status = N'success'
-                  AND destination_record_id IS NOT NULL
+                  AND docuware_id IS NOT NULL
                 """,
                 connection);
             command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
@@ -199,13 +186,11 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
         int synchronizationId,
         int page,
         int pageSize,
-        string? status,
         Guid? lastRunId,
         CancellationToken cancellationToken)
     {
         page = Math.Max(page, 0);
         pageSize = ClampPageSize(pageSize);
-        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToLowerInvariant();
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -221,11 +206,6 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
             }
 
             var filters = new List<string> { "synchronization_id = @synchronizationId" };
-            if (normalizedStatus is not null)
-            {
-                filters.Add("status = @status");
-            }
-
             if (lastRunId is not null)
             {
                 filters.Add("last_run_id = @lastRunId");
@@ -238,11 +218,6 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
                     command =>
                     {
                         command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
-                        if (normalizedStatus is not null)
-                        {
-                            command.Parameters.AddWithValue("@status", normalizedStatus);
-                        }
-
                         if (lastRunId is Guid run)
                         {
                             command.Parameters.AddWithValue("@lastRunId", run);
@@ -253,9 +228,7 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
 
             await using var command = new SqlCommand(
                 $"""
-                SELECT id, synchronization_id, last_run_id, source_record_id, source_business_key, source_hash,
-                       destination_record_id, status, attempt_count, last_attempt_at, last_success_at,
-                       error_code, error_message, created_at, updated_at
+                SELECT id, synchronization_id, last_run_id, entity_id, docuware_id, error, created_at, updated_at
                 FROM synchronization_record
                 WHERE {where}
                 ORDER BY updated_at DESC, created_at DESC, id DESC
@@ -263,11 +236,6 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
                 """,
                 connection);
             command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
-            if (normalizedStatus is not null)
-            {
-                command.Parameters.AddWithValue("@status", normalizedStatus);
-            }
-
             if (lastRunId is Guid runFilter)
             {
                 command.Parameters.AddWithValue("@lastRunId", runFilter);
@@ -357,14 +325,10 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
             Id = reader.GetGuid(reader.GetOrdinal("id")),
             SynchronizationId = reader.GetInt32(reader.GetOrdinal("synchronization_id")),
             Status = reader.GetString(reader.GetOrdinal("status")),
-            StartedAt = ToOffset(ReadUtc(reader, "started_at")),
+            StartAt = ToOffset(ReadUtc(reader, "start_at")),
             CompletedAt = ToOffset(ReadUtcOrNull(reader, "completed_at")),
-            TotalRecords = reader.GetInt32(reader.GetOrdinal("total_records")),
-            ProcessedRecords = reader.GetInt32(reader.GetOrdinal("processed_records")),
-            SuccessRecords = reader.GetInt32(reader.GetOrdinal("success_records")),
-            FailedRecords = reader.GetInt32(reader.GetOrdinal("failed_records")),
-            SkippedRecords = reader.GetInt32(reader.GetOrdinal("skipped_records")),
-            RetryCount = reader.GetInt32(reader.GetOrdinal("retry_count")),
+            RecordsInserted = reader.GetInt32(reader.GetOrdinal("records_inserted")),
+            RecordsUpdated = reader.GetInt32(reader.GetOrdinal("records_updated")),
             ErrorMessage = ReadStringOrNull(reader, "error_message"),
             CreatedAt = ToOffset(ReadUtc(reader, "created_at"))
         };
@@ -375,16 +339,9 @@ public sealed class SynchronizationExecutionStore : ISynchronizationExecutionSto
             Id = reader.GetGuid(reader.GetOrdinal("id")),
             SynchronizationId = reader.GetInt32(reader.GetOrdinal("synchronization_id")),
             LastRunId = reader.GetGuid(reader.GetOrdinal("last_run_id")),
-            SourceRecordId = reader.GetString(reader.GetOrdinal("source_record_id")),
-            SourceBusinessKey = ReadStringOrNull(reader, "source_business_key"),
-            SourceHash = ReadStringOrNull(reader, "source_hash"),
-            DestinationRecordId = ReadStringOrNull(reader, "destination_record_id"),
-            Status = reader.GetString(reader.GetOrdinal("status")),
-            AttemptCount = reader.GetInt32(reader.GetOrdinal("attempt_count")),
-            LastAttemptAt = ToOffset(ReadUtcOrNull(reader, "last_attempt_at")),
-            LastSuccessAt = ToOffset(ReadUtcOrNull(reader, "last_success_at")),
-            ErrorCode = ReadStringOrNull(reader, "error_code"),
-            ErrorMessage = ReadStringOrNull(reader, "error_message"),
+            EntityId = reader.GetString(reader.GetOrdinal("entity_id")),
+            DocuWareId = ReadStringOrNull(reader, "docuware_id"),
+            Error = ReadStringOrNull(reader, "error"),
             CreatedAt = ToOffset(ReadUtc(reader, "created_at")),
             UpdatedAt = ToOffset(ReadUtc(reader, "updated_at"))
         };

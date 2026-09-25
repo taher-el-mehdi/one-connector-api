@@ -190,13 +190,7 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
         Guid userId,
         CancellationToken cancellationToken)
     {
-        var field = EntityMappingRules.NormalizeField(
-            request.EntityFieldName,
-            request.CabinetFieldName,
-            request.EntityTypeName,
-            request.CabinetTypeName,
-            request.EntityTypeLong,
-            request.CabinetTypeLong);
+        var field = NormalizeField(request);
         var now = DateTime.UtcNow;
         var actor = userId.ToString("D");
         try
@@ -210,15 +204,17 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
 
             await EnsureFieldAvailableAsync(connection, mappingId, field.EntityFieldName, exceptId: null, cancellationToken)
                 .ConfigureAwait(false);
+            await EnsureKeyOrderAvailableAsync(connection, mappingId, field, exceptId: null, cancellationToken)
+                .ConfigureAwait(false);
             await using var command = new SqlCommand(
                 """
                 INSERT INTO mapping_field
                     (id_mapping_table, entity_field_name, cabinet_field_name, entity_type_name, cabinet_type_name,
-                     entity_type_long, cabinet_type_long, created_by, created_at, updated_at, updated_by)
+                     entity_type_long, cabinet_type_long, is_key, key_order, created_by, created_at, updated_at, updated_by)
                 OUTPUT INSERTED.id
                 VALUES
                     (@mappingId, @entityFieldName, @cabinetFieldName, @entityTypeName, @cabinetTypeName,
-                     @entityTypeLong, @cabinetTypeLong, @actor, @now, @now, @actor)
+                     @entityTypeLong, @cabinetTypeLong, @isKey, @keyOrder, @actor, @now, @now, @actor)
                 """,
                 connection);
             BindField(command, mappingId, field, actor, now);
@@ -226,6 +222,74 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
             var mapping = (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(item => item.Id == mappingId);
             return mapping?.Fields.FirstOrDefault(item => item.Id == id);
+        }
+        catch (MappingConflictException)
+        {
+            throw;
+        }
+        catch (SqlException ex) when (SqlStore.IsDuplicateKey(ex))
+        {
+            throw new MappingConflictException("A field with this entity field name already exists on the mapping.");
+        }
+        catch (SqlException ex)
+        {
+            throw new MappingStoreException(ex.Message, ex);
+        }
+    }
+
+    public async Task<EntityMappingFieldDto?> UpdateFieldAsync(
+        int mappingId,
+        int fieldId,
+        SaveEntityMappingFieldRequest request,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var field = NormalizeField(request);
+        var now = DateTime.UtcNow;
+        var actor = userId.ToString("D");
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            await RequireSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            var existing = (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
+                .FirstOrDefault(mapping => mapping.Id == mappingId)
+                ?.Fields.FirstOrDefault(item => item.Id == fieldId);
+            if (existing is null)
+            {
+                return null;
+            }
+
+            await EnsureFieldAvailableAsync(connection, mappingId, field.EntityFieldName, fieldId, cancellationToken)
+                .ConfigureAwait(false);
+            await EnsureKeyOrderAvailableAsync(connection, mappingId, field, fieldId, cancellationToken)
+                .ConfigureAwait(false);
+            await using var command = new SqlCommand(
+                """
+                UPDATE mapping_field
+                SET entity_field_name = @entityFieldName,
+                    cabinet_field_name = @cabinetFieldName,
+                    entity_type_name = @entityTypeName,
+                    cabinet_type_name = @cabinetTypeName,
+                    entity_type_long = @entityTypeLong,
+                    cabinet_type_long = @cabinetTypeLong,
+                    is_key = @isKey,
+                    key_order = @keyOrder,
+                    updated_at = @now,
+                    updated_by = @actor
+                WHERE id = @id AND id_mapping_table = @mappingId
+                """,
+                connection);
+            BindField(command, mappingId, field, actor, now);
+            command.Parameters.AddWithValue("@id", fieldId);
+            var updated = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (updated == 0)
+            {
+                return null;
+            }
+
+            var mapping = (await ReadAllAsync(connection, cancellationToken).ConfigureAwait(false))
+                .FirstOrDefault(item => item.Id == mappingId);
+            return mapping?.Fields.FirstOrDefault(item => item.Id == fieldId);
         }
         catch (MappingConflictException)
         {
@@ -310,9 +374,14 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
             ORDER BY code, id;
 
             SELECT id, id_mapping_table, entity_field_name, cabinet_field_name,
-                   entity_type_name, cabinet_type_name, entity_type_long, cabinet_type_long
+                   entity_type_name, cabinet_type_name, entity_type_long, cabinet_type_long,
+                   is_key, key_order
             FROM mapping_field
-            ORDER BY id_mapping_table, entity_field_name, id
+            ORDER BY id_mapping_table,
+                     CASE WHEN is_key = 1 THEN 0 ELSE 1 END,
+                     key_order,
+                     entity_field_name,
+                     id
             """,
             connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -344,7 +413,9 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
                 EntityTypeName = reader.IsDBNull(reader.GetOrdinal("entity_type_name")) ? null : reader.GetString("entity_type_name"),
                 CabinetTypeName = reader.IsDBNull(reader.GetOrdinal("cabinet_type_name")) ? null : reader.GetString("cabinet_type_name"),
                 EntityTypeLong = reader.IsDBNull(reader.GetOrdinal("entity_type_long")) ? null : reader.GetInt32("entity_type_long"),
-                CabinetTypeLong = reader.IsDBNull(reader.GetOrdinal("cabinet_type_long")) ? null : reader.GetInt32("cabinet_type_long")
+                CabinetTypeLong = reader.IsDBNull(reader.GetOrdinal("cabinet_type_long")) ? null : reader.GetInt32("cabinet_type_long"),
+                IsKey = !reader.IsDBNull(reader.GetOrdinal("is_key")) && reader.GetBoolean("is_key"),
+                KeyOrder = reader.IsDBNull(reader.GetOrdinal("key_order")) ? null : reader.GetInt32("key_order")
             });
         }
 
@@ -442,6 +513,38 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
         }
     }
 
+    private static async Task EnsureKeyOrderAvailableAsync(
+        SqlConnection connection,
+        int mappingId,
+        NormalizedMappingField field,
+        int? exceptId,
+        CancellationToken cancellationToken)
+    {
+        if (!field.IsKey || field.KeyOrder is null)
+        {
+            return;
+        }
+
+        await using var command = new SqlCommand(
+            """
+            SELECT TOP (1) id
+            FROM mapping_field
+            WHERE id_mapping_table = @mappingId
+              AND is_key = 1
+              AND key_order = @keyOrder
+              AND (@exceptId IS NULL OR id <> @exceptId)
+            """,
+            connection);
+        command.Parameters.AddWithValue("@mappingId", mappingId);
+        command.Parameters.AddWithValue("@keyOrder", field.KeyOrder.Value);
+        command.Parameters.AddWithValue("@exceptId", exceptId.HasValue ? exceptId.Value : DBNull.Value);
+        var existing = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (existing is not null and not DBNull)
+        {
+            throw new MappingConflictException("Another key field already uses this key order.");
+        }
+    }
+
     private static void BindPair(SqlCommand command, NormalizedMapping pair, string actor, DateTime now)
     {
         command.Parameters.AddWithValue("@entityName", pair.EntityName);
@@ -455,6 +558,17 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
         command.Parameters.AddWithValue("@actor", actor);
         command.Parameters.AddWithValue("@now", now);
     }
+
+    private static NormalizedMappingField NormalizeField(SaveEntityMappingFieldRequest request) =>
+        EntityMappingRules.NormalizeField(
+            request.EntityFieldName,
+            request.CabinetFieldName,
+            request.EntityTypeName,
+            request.CabinetTypeName,
+            request.EntityTypeLong,
+            request.CabinetTypeLong,
+            request.IsKey,
+            request.KeyOrder);
 
     private static NormalizedMapping Normalize(SaveEntityMappingRequest request) =>
         EntityMappingRules.NormalizePair(
@@ -515,6 +629,8 @@ public sealed class SqlEntityMappingStore : IEntityMappingStore
         command.Parameters.AddWithValue("@cabinetTypeName", (object?)field.CabinetTypeName ?? DBNull.Value);
         command.Parameters.AddWithValue("@entityTypeLong", (object?)field.EntityTypeLong ?? DBNull.Value);
         command.Parameters.AddWithValue("@cabinetTypeLong", (object?)field.CabinetTypeLong ?? DBNull.Value);
+        command.Parameters.AddWithValue("@isKey", field.IsKey);
+        command.Parameters.AddWithValue("@keyOrder", (object?)field.KeyOrder ?? DBNull.Value);
         command.Parameters.AddWithValue("@actor", actor);
         command.Parameters.AddWithValue("@now", now);
     }

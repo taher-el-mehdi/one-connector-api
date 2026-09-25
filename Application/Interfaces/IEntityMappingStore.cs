@@ -20,6 +20,13 @@ public interface IEntityMappingStore
         Guid userId,
         CancellationToken cancellationToken);
 
+    Task<EntityMappingFieldDto?> UpdateFieldAsync(
+        int mappingId,
+        int fieldId,
+        SaveEntityMappingFieldRequest request,
+        Guid userId,
+        CancellationToken cancellationToken);
+
     Task<bool> DeleteFieldAsync(int mappingId, int fieldId, CancellationToken cancellationToken);
 
     Task<MappingLabels> GetLabelsAsync(CancellationToken cancellationToken);

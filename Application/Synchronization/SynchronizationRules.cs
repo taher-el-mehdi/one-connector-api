@@ -21,7 +21,7 @@ public static class SynchronizationRules
         DateTimeOffset? nextRunAt,
         bool? recurrenceEnabled,
         string? recurrenceType,
-        string? recurrenceDays,
+        RecurrenceWeekdays recurrenceDays,
         string? recurrenceTime,
         int? intervalValue,
         string? intervalUnit,

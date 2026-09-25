@@ -20,7 +20,15 @@ internal static class SynchronizationSchema
     {
         AddBit(connection, "recurrence_enabled", "df_synchronization_recurrence_enabled");
         AddNullable(connection, "recurrence_type", "NVARCHAR(16) NULL");
-        AddNullable(connection, "recurrence_days", "NVARCHAR(128) NULL");
+        AddBit(connection, "recurrence_mondays", "df_synchronization_recurrence_mondays");
+        AddBit(connection, "recurrence_tuesdays", "df_synchronization_recurrence_tuesdays");
+        AddBit(connection, "recurrence_wednesdays", "df_synchronization_recurrence_wednesdays");
+        AddBit(connection, "recurrence_thursdays", "df_synchronization_recurrence_thursdays");
+        AddBit(connection, "recurrence_fridays", "df_synchronization_recurrence_fridays");
+        AddBit(connection, "recurrence_saturdays", "df_synchronization_recurrence_saturdays");
+        AddBit(connection, "recurrence_sundays", "df_synchronization_recurrence_sundays");
+        CopyLegacyWeekdays(connection);
+        DropColumn(connection, "recurrence_days");
         AddNullable(connection, "recurrence_time", "TIME NULL");
         AddNullable(connection, "interval_value", "INT NULL");
         AddNullable(connection, "interval_unit", "NVARCHAR(16) NULL");
@@ -49,6 +57,39 @@ internal static class SynchronizationSchema
                 )
                 """);
         }
+    }
+
+    private static void CopyLegacyWeekdays(SqlConnection connection)
+    {
+        if (!ColumnExists(connection, "recurrence_days"))
+        {
+            return;
+        }
+
+        Execute(
+            connection,
+            """
+            UPDATE [dbo].[synchronization]
+            SET
+                [recurrence_mondays] = CASE WHEN [recurrence_days] LIKE N'%MONDAY%' THEN 1 ELSE [recurrence_mondays] END,
+                [recurrence_tuesdays] = CASE WHEN [recurrence_days] LIKE N'%TUESDAY%' THEN 1 ELSE [recurrence_tuesdays] END,
+                [recurrence_wednesdays] = CASE WHEN [recurrence_days] LIKE N'%WEDNESDAY%' THEN 1 ELSE [recurrence_wednesdays] END,
+                [recurrence_thursdays] = CASE WHEN [recurrence_days] LIKE N'%THURSDAY%' THEN 1 ELSE [recurrence_thursdays] END,
+                [recurrence_fridays] = CASE WHEN [recurrence_days] LIKE N'%FRIDAY%' THEN 1 ELSE [recurrence_fridays] END,
+                [recurrence_saturdays] = CASE WHEN [recurrence_days] LIKE N'%SATURDAY%' THEN 1 ELSE [recurrence_saturdays] END,
+                [recurrence_sundays] = CASE WHEN [recurrence_days] LIKE N'%SUNDAY%' THEN 1 ELSE [recurrence_sundays] END
+            WHERE [recurrence_days] IS NOT NULL
+            """);
+    }
+
+    private static void DropColumn(SqlConnection connection, string name)
+    {
+        if (!ColumnExists(connection, name))
+        {
+            return;
+        }
+
+        Execute(connection, $"ALTER TABLE [dbo].[synchronization] DROP COLUMN [{name}]");
     }
 
     private static void AddBit(SqlConnection connection, string name, string defaultName)

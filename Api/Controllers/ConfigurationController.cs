@@ -48,9 +48,9 @@ public sealed class ConfigurationController : ControllerBase
     public async Task<ActionResult<PublicConfigurationResponse>> Get(CancellationToken cancellationToken) =>
         Ok(new PublicConfigurationResponse
         {
-            DocuWare = await MapDocuWareAsync(cancellationToken).ConfigureAwait(false),
-            Sage = await MapSageAsync(cancellationToken).ConfigureAwait(false),
-            Synchronization = await MapSynchronizationAsync(cancellationToken).ConfigureAwait(false),
+            DocuWare = MapDocuWare(),
+            Sage = MapSage(),
+            Synchronization = MapSynchronization(),
             Tracking = new PublicTrackingConfiguration
             {
                 DatabasePath = _tracking.DatabasePath
@@ -117,7 +117,7 @@ public sealed class ConfigurationController : ControllerBase
         try
         {
             await _docuWareSettings.UpdateAsync(request, userId, cancellationToken).ConfigureAwait(false);
-            return Ok(await MapDocuWareAsync(cancellationToken).ConfigureAwait(false));
+            return Ok(MapDocuWare());
         }
         catch (SettingsValidationException exception)
         {
@@ -136,7 +136,7 @@ public sealed class ConfigurationController : ControllerBase
         }
 
         await _docuWareSettings.SetStatusAsync(request.Status, userId, cancellationToken).ConfigureAwait(false);
-        return Ok(await MapDocuWareAsync(cancellationToken).ConfigureAwait(false));
+        return Ok(MapDocuWare());
     }
 
     [HttpPost("docuware/reveal")]
@@ -184,7 +184,7 @@ public sealed class ConfigurationController : ControllerBase
         try
         {
             await _sageSettings.UpdateAsync(request, userId, cancellationToken).ConfigureAwait(false);
-            return Ok(await MapSageAsync(cancellationToken).ConfigureAwait(false));
+            return Ok(MapSage());
         }
         catch (SettingsValidationException exception)
         {
@@ -203,7 +203,7 @@ public sealed class ConfigurationController : ControllerBase
         }
 
         await _sageSettings.SetStatusAsync(request.Status, userId, cancellationToken).ConfigureAwait(false);
-        return Ok(await MapSageAsync(cancellationToken).ConfigureAwait(false));
+        return Ok(MapSage());
     }
 
     [HttpPost("sage/reveal")]
@@ -245,7 +245,7 @@ public sealed class ConfigurationController : ControllerBase
         try
         {
             await _synchronizationSettings.UpdateAsync(request, userId, cancellationToken).ConfigureAwait(false);
-            return Ok(await MapSynchronizationAsync(cancellationToken).ConfigureAwait(false));
+            return Ok(MapSynchronization());
         }
         catch (SettingsValidationException exception)
         {
@@ -259,9 +259,8 @@ public sealed class ConfigurationController : ControllerBase
         return Guid.TryParse(id, out userId);
     }
 
-    private async Task<PublicDocuWareConfiguration> MapDocuWareAsync(CancellationToken cancellationToken)
+    private PublicDocuWareConfiguration MapDocuWare()
     {
-        var required = await _docuWareSettings.ReadRequirementsAsync(cancellationToken).ConfigureAwait(false);
         return new PublicDocuWareConfiguration
         {
             PlatformUrl = _docuWare.PlatformUrl,
@@ -272,18 +271,15 @@ public sealed class ConfigurationController : ControllerBase
             ClientId = _docuWare.ClientId,
             ClientSecretConfigured = !string.IsNullOrEmpty(_docuWare.ClientSecret),
             Scope = _docuWare.Scope,
-            Configured = _docuWare.Configured,
             Status = _docuWare.Status,
-            Required = required,
             Supplier = Cabinet(_docuWare.FileCabinets.Supplier),
             ChartOfAccounts = Cabinet(_docuWare.FileCabinets.ChartOfAccounts),
             AnalyticSection = Cabinet(_docuWare.FileCabinets.AnalyticSection)
         };
     }
 
-    private async Task<PublicSageConfiguration> MapSageAsync(CancellationToken cancellationToken)
+    private PublicSageConfiguration MapSage()
     {
-        var required = await _sageSettings.ReadRequirementsAsync(cancellationToken).ConfigureAwait(false);
         return new PublicSageConfiguration
         {
             Server = _sage.Server,
@@ -295,15 +291,12 @@ public sealed class ConfigurationController : ControllerBase
             CommandTimeoutSeconds = _sage.CommandTimeoutSeconds,
             SuppliersOnly = _sage.SuppliersOnly,
             ChartOfAccountsTypeZeroOnly = _sage.ChartOfAccountsTypeZeroOnly,
-            Configured = _sage.Configured,
-            Status = _sage.Status,
-            Required = required
+            Status = _sage.Status
         };
     }
 
-    private async Task<PublicSynchronizationConfiguration> MapSynchronizationAsync(CancellationToken cancellationToken)
+    private PublicSynchronizationConfiguration MapSynchronization()
     {
-        var required = await _synchronizationSettings.ReadRequirementsAsync(cancellationToken).ConfigureAwait(false);
         return new PublicSynchronizationConfiguration
         {
             Enabled = _synchronization.Enabled,
@@ -314,9 +307,7 @@ public sealed class ConfigurationController : ControllerBase
             ApplySageWrites = _synchronization.ApplySageWrites,
             SageToDocuWare = _synchronization.SageToDocuWare,
             DocuWareToSage = _synchronization.DocuWareToSage,
-            Configured = _synchronization.Configured,
-            Status = _synchronization.Status,
-            Required = required
+            Status = _synchronization.Status
         };
     }
 

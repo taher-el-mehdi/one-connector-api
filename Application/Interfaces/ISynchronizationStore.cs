@@ -49,13 +49,9 @@ public interface ISynchronizationStore
 
 public sealed class SynchronizationRunCounts
 {
-    public int TotalRecords { get; init; }
+    public int RecordsInserted { get; init; }
 
-    public int SuccessRecords { get; init; }
-
-    public int FailedRecords { get; init; }
-
-    public int SkippedRecords { get; init; }
+    public int RecordsUpdated { get; init; }
 
     public string? ErrorMessage { get; init; }
 }

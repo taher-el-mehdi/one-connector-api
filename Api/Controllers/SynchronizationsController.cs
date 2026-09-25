@@ -275,13 +275,12 @@ public sealed class SynchronizationsController : ControllerBase
         Guid runId,
         [FromQuery] int page = 0,
         [FromQuery] int pageSize = 20,
-        [FromQuery] string? status = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
             var result = await _execution
-                .ListRecordsAsync(id, page, pageSize, status, runId, cancellationToken)
+                .ListRecordsAsync(id, page, pageSize, runId, cancellationToken)
                 .ConfigureAwait(false);
             return result is null ? NotFound() : Ok(result);
         }
@@ -296,13 +295,12 @@ public sealed class SynchronizationsController : ControllerBase
         int id,
         [FromQuery] int page = 0,
         [FromQuery] int pageSize = 20,
-        [FromQuery] string? status = null,
         CancellationToken cancellationToken = default)
     {
         try
         {
             var result = await _execution
-                .ListRecordsAsync(id, page, pageSize, status, null, cancellationToken)
+                .ListRecordsAsync(id, page, pageSize, null, cancellationToken)
                 .ConfigureAwait(false);
             return result is null ? NotFound() : Ok(result);
         }

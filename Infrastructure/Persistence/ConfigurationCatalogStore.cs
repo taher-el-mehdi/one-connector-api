@@ -115,9 +115,9 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                 await using var insert = new SqlCommand(
                     """
                     INSERT INTO setting
-                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
+                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, status)
                     VALUES
-                        (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, 0, 0, 1)
+                        (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, 0)
                     """,
                     connection,
                     transaction);
@@ -154,7 +154,7 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new SqlCommand(
             """
-            SELECT type, code, description, [key], [value], configured, status, [required]
+            SELECT type, code, description, [key], [value], status
             FROM setting
             ORDER BY type, code, [key]
             """,
@@ -172,9 +172,7 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                 Description = reader.IsDBNull(descriptionOrdinal) ? null : reader.GetString(descriptionOrdinal),
                 Key = reader.GetString("key"),
                 Value = reader.IsDBNull(valueOrdinal) ? null : reader.GetString(valueOrdinal),
-                Configured = reader.GetBoolean("configured"),
-                Status = reader.GetBoolean("status"),
-                Required = reader.GetBoolean("required")
+                Status = reader.GetBoolean("status")
             });
         }
 
@@ -226,9 +224,7 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                     UPDATE setting
                     SET description = @description,
                         [value] = @value,
-                        configured = @configured,
                         status = @status,
-                        [required] = @required,
                         updated_at = @now,
                         updated_by = @actor
                     WHERE type = @type AND code = @code AND [key] = @key
@@ -240,9 +236,7 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                 update.Parameters.AddWithValue("@key", row.Key);
                 update.Parameters.AddWithValue("@description", row.Description is null ? DBNull.Value : row.Description);
                 update.Parameters.AddWithValue("@value", row.Value is null ? DBNull.Value : row.Value);
-                update.Parameters.AddWithValue("@configured", row.Configured ? 1 : 0);
                 update.Parameters.AddWithValue("@status", row.Status ? 1 : 0);
-                update.Parameters.AddWithValue("@required", row.Required ? 1 : 0);
                 update.Parameters.AddWithValue("@now", now);
                 update.Parameters.AddWithValue("@actor", actor);
                 if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0)
@@ -254,9 +248,9 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                 await using var insert = new SqlCommand(
                     """
                     INSERT INTO setting
-                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
+                        (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, status)
                     VALUES
-                        (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @configured, @status, @required)
+                        (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @status)
                     """,
                     connection,
                     transaction);
@@ -265,9 +259,7 @@ public sealed class ConfigurationCatalogStore : IConfigurationCatalog
                 insert.Parameters.AddWithValue("@key", row.Key);
                 insert.Parameters.AddWithValue("@description", row.Description is null ? DBNull.Value : row.Description);
                 insert.Parameters.AddWithValue("@value", row.Value is null ? DBNull.Value : row.Value);
-                insert.Parameters.AddWithValue("@configured", row.Configured ? 1 : 0);
                 insert.Parameters.AddWithValue("@status", row.Status ? 1 : 0);
-                insert.Parameters.AddWithValue("@required", row.Required ? 1 : 0);
                 insert.Parameters.AddWithValue("@now", now);
                 insert.Parameters.AddWithValue("@actor", actor);
                 await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

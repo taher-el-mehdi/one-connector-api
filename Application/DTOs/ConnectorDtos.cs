@@ -179,11 +179,7 @@ public sealed class ConfigurationSettingRow
 
     public string? Value { get; init; }
 
-    public bool Configured { get; init; }
-
     public bool Status { get; init; }
-
-    public bool Required { get; init; } = true;
 }
 
 public sealed class ImportConfigurationResult
@@ -211,36 +207,13 @@ public sealed class PublicDocuWareConfiguration
 
     public required string Scope { get; init; }
 
-    public required bool Configured { get; init; }
-
     public required bool Status { get; init; }
-
-    public required DocuWareFieldRequirements Required { get; init; }
 
     public required PublicFileCabinetConfiguration Supplier { get; init; }
 
     public required PublicFileCabinetConfiguration ChartOfAccounts { get; init; }
 
     public required PublicFileCabinetConfiguration AnalyticSection { get; init; }
-}
-
-public sealed class DocuWareFieldRequirements
-{
-    public bool PlatformUrl { get; init; }
-
-    public bool Organization { get; init; }
-
-    public bool Authentication { get; init; }
-
-    public bool UserName { get; init; }
-
-    public bool Password { get; init; }
-
-    public bool ClientId { get; init; }
-
-    public bool ClientSecret { get; init; }
-
-    public bool Scope { get; init; }
 }
 
 public sealed class UpdateDocuWareConfigurationRequest
@@ -408,26 +381,7 @@ public sealed class PublicSageConfiguration
 
     public required bool ChartOfAccountsTypeZeroOnly { get; init; }
 
-    public required bool Configured { get; init; }
-
     public required bool Status { get; init; }
-
-    public required SageFieldRequirements Required { get; init; }
-}
-
-public sealed class SageFieldRequirements
-{
-    public bool Server { get; init; }
-
-    public bool Database { get; init; }
-
-    public bool Authentication { get; init; }
-
-    public bool UserName { get; init; }
-
-    public bool Password { get; init; }
-
-    public bool CommandTimeout { get; init; }
 }
 
 public sealed class UpdateSageConfigurationRequest
@@ -473,20 +427,7 @@ public sealed class PublicSynchronizationConfiguration
 
     public required bool DocuWareToSage { get; init; }
 
-    public required bool Configured { get; init; }
-
     public required bool Status { get; init; }
-
-    public required SynchronizationFieldRequirements Required { get; init; }
-}
-
-public sealed class SynchronizationFieldRequirements
-{
-    public bool Interval { get; init; }
-
-    public bool MaxRetries { get; init; }
-
-    public bool FirstRetryDelay { get; init; }
 }
 
 public sealed class UpdateSynchronizationConfigurationRequest
@@ -573,6 +514,10 @@ public sealed class EntityMappingFieldDto
     public int? EntityTypeLong { get; init; }
 
     public int? CabinetTypeLong { get; init; }
+
+    public bool IsKey { get; init; }
+
+    public int? KeyOrder { get; init; }
 }
 
 public sealed class SaveEntityMappingRequest
@@ -627,7 +572,19 @@ public sealed class SynchronizationRecordDto
 
     public string? RecurrenceType { get; init; }
 
-    public string? RecurrenceDays { get; init; }
+    public bool RecurrenceMondays { get; init; }
+
+    public bool RecurrenceTuesdays { get; init; }
+
+    public bool RecurrenceWednesdays { get; init; }
+
+    public bool RecurrenceThursdays { get; init; }
+
+    public bool RecurrenceFridays { get; init; }
+
+    public bool RecurrenceSaturdays { get; init; }
+
+    public bool RecurrenceSundays { get; init; }
 
     public string? RecurrenceTime { get; init; }
 
@@ -705,7 +662,19 @@ public sealed class SaveSynchronizationRequest
 
     public string? RecurrenceType { get; init; }
 
-    public string? RecurrenceDays { get; init; }
+    public bool RecurrenceMondays { get; init; }
+
+    public bool RecurrenceTuesdays { get; init; }
+
+    public bool RecurrenceWednesdays { get; init; }
+
+    public bool RecurrenceThursdays { get; init; }
+
+    public bool RecurrenceFridays { get; init; }
+
+    public bool RecurrenceSaturdays { get; init; }
+
+    public bool RecurrenceSundays { get; init; }
 
     public string? RecurrenceTime { get; init; }
 
@@ -724,21 +693,13 @@ public sealed class SynchronizationRunDto
 
     public required string Status { get; init; }
 
-    public DateTimeOffset StartedAt { get; init; }
+    public DateTimeOffset StartAt { get; init; }
 
     public DateTimeOffset? CompletedAt { get; init; }
 
-    public int TotalRecords { get; init; }
+    public int RecordsInserted { get; init; }
 
-    public int ProcessedRecords { get; init; }
-
-    public int SuccessRecords { get; init; }
-
-    public int FailedRecords { get; init; }
-
-    public int SkippedRecords { get; init; }
-
-    public int RetryCount { get; init; }
+    public int RecordsUpdated { get; init; }
 
     public string? ErrorMessage { get; init; }
 
@@ -764,25 +725,11 @@ public sealed class SynchronizationSourceRecordDto
 
     public Guid LastRunId { get; init; }
 
-    public required string SourceRecordId { get; init; }
+    public required string EntityId { get; init; }
 
-    public string? SourceBusinessKey { get; init; }
+    public string? DocuWareId { get; init; }
 
-    public string? SourceHash { get; init; }
-
-    public string? DestinationRecordId { get; init; }
-
-    public required string Status { get; init; }
-
-    public int AttemptCount { get; init; }
-
-    public DateTimeOffset? LastAttemptAt { get; init; }
-
-    public DateTimeOffset? LastSuccessAt { get; init; }
-
-    public string? ErrorCode { get; init; }
-
-    public string? ErrorMessage { get; init; }
+    public string? Error { get; init; }
 
     public DateTimeOffset CreatedAt { get; init; }
 
@@ -813,4 +760,8 @@ public sealed class SaveEntityMappingFieldRequest
     public int? EntityTypeLong { get; init; }
 
     public int? CabinetTypeLong { get; init; }
+
+    public bool IsKey { get; init; }
+
+    public int? KeyOrder { get; init; }
 }

@@ -24,8 +24,8 @@ internal static class SettingSchema
         using var command = new SqlCommand(
             $"""
             INSERT INTO setting
-                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
-            SELECT @type, @code, @description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required]
+                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, status)
+            SELECT @type, @code, @description, [key], [value], created_by, created_at, updated_at, updated_by, status
             FROM [{source}] AS source
             WHERE NOT EXISTS (
                 SELECT 1 FROM setting AS target

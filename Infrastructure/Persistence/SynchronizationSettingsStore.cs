@@ -37,14 +37,10 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
             throw new SettingsValidationException("first_retry_delay_invalid");
         }
 
-        var required = await ReadRequirementsAsync(cancellationToken).ConfigureAwait(false);
         var changed = request.IntervalSeconds != _options.IntervalSeconds
             || request.MaxRetries != _options.MaxRetries
             || request.FirstRetryDelaySeconds != _options.FirstRetryDelaySeconds;
         var status = changed ? false : _options.Status;
-        var configured = InRange(required.Interval, request.IntervalSeconds is >= 1 and <= 86400)
-            && InRange(required.MaxRetries, request.MaxRetries is >= 0 and <= 100)
-            && InRange(required.FirstRetryDelay, request.FirstRetryDelaySeconds is >= 0 and <= 86400);
         var now = DateTime.UtcNow;
         var actor = userId.ToString("D");
         var updates = new (string Key, string Value)[]
@@ -64,10 +60,10 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
             {
                 foreach (var (key, value) in updates)
                 {
-                    await UpsertAsync(connection, transaction, key, value, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
+                    await UpsertAsync(connection, transaction, key, value, actor, now, status, cancellationToken).ConfigureAwait(false);
                 }
 
-                await StampAsync(connection, transaction, actor, now, configured, status, cancellationToken).ConfigureAwait(false);
+                await StampAsync(connection, transaction, actor, now, status, cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch
@@ -79,7 +75,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
             _options.IntervalSeconds = request.IntervalSeconds;
             _options.MaxRetries = request.MaxRetries;
             _options.FirstRetryDelaySeconds = request.FirstRetryDelaySeconds;
-            _options.Configured = configured;
             _options.Status = status;
         }
         finally
@@ -88,38 +83,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         }
     }
 
-    public async Task<SynchronizationFieldRequirements> ReadRequirementsAsync(CancellationToken cancellationToken)
-    {
-        var flags = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        await using var connection = new SqlConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new SqlCommand(
-            """
-            SELECT [key], [required] FROM setting
-            WHERE type = @type AND code = @code
-            """,
-            connection);
-        command.Parameters.AddWithValue("@type", SettingTable.Synchronization);
-        command.Parameters.AddWithValue("@code", SettingTable.Synchronization);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            flags[reader.GetString("key")] = !reader.IsDBNull(reader.GetOrdinal("required")) && reader.GetBoolean("required");
-        }
-
-        return new SynchronizationFieldRequirements
-        {
-            Interval = Flag(flags, SettingKeys.IntervalSeconds),
-            MaxRetries = Flag(flags, SettingKeys.MaxRetries),
-            FirstRetryDelay = Flag(flags, SettingKeys.FirstRetryDelaySeconds)
-        };
-    }
-
-    private static bool Flag(Dictionary<string, bool> flags, string key) =>
-        flags.TryGetValue(key, out var required) && required;
-
-    private static bool InRange(bool required, bool valid) => !required || valid;
-
     private static async Task UpsertAsync(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -127,7 +90,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         string value,
         string actor,
         DateTime now,
-        bool configured,
         bool status,
         CancellationToken cancellationToken)
     {
@@ -137,7 +99,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
             SET [value] = @value,
                 updated_at = @now,
                 updated_by = @actor,
-                configured = @configured,
                 status = @status
             WHERE type = @type AND code = @code AND [key] = @key
             """,
@@ -149,7 +110,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         update.Parameters.AddWithValue("@value", value);
         update.Parameters.AddWithValue("@now", now);
         update.Parameters.AddWithValue("@actor", actor);
-        update.Parameters.AddWithValue("@configured", configured ? 1 : 0);
         update.Parameters.AddWithValue("@status", status ? 1 : 0);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0)
         {
@@ -159,9 +119,9 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         await using var insert = new SqlCommand(
             """
             INSERT INTO setting
-                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, configured, status, [required])
+                (type, code, description, [key], [value], created_by, created_at, updated_at, updated_by, status)
             VALUES
-                (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @configured, @status, 1)
+                (@type, @code, @description, @key, @value, @actor, @now, @now, @actor, @status)
             """,
             connection,
             transaction);
@@ -172,7 +132,6 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         insert.Parameters.AddWithValue("@value", value);
         insert.Parameters.AddWithValue("@actor", actor);
         insert.Parameters.AddWithValue("@now", now);
-        insert.Parameters.AddWithValue("@configured", configured ? 1 : 0);
         insert.Parameters.AddWithValue("@status", status ? 1 : 0);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -182,22 +141,19 @@ public sealed class SynchronizationSettingsStore : ISynchronizationSettingsStore
         SqlTransaction transaction,
         string actor,
         DateTime now,
-        bool configured,
         bool status,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
             """
             UPDATE setting
-            SET configured = @configured,
-                status = @status,
+            SET status = @status,
                 updated_at = @now,
                 updated_by = @actor
             WHERE type = @type AND code = @code
             """,
             connection,
             transaction);
-        command.Parameters.AddWithValue("@configured", configured ? 1 : 0);
         command.Parameters.AddWithValue("@status", status ? 1 : 0);
         command.Parameters.AddWithValue("@now", now);
         command.Parameters.AddWithValue("@actor", actor);

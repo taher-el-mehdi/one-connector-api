@@ -55,9 +55,12 @@ The process needs a SQL Server connection before it can read DocuWare, Sage, syn
 |---|---|
 | `ConnectorStore__Server` | SQL Server instance, such as `DESKTOP-S4EOQ9N\BCDEMO` |
 | `ConnectorStore__Database` | Database name, such as `one_connector` |
-| `ConnectorStore__User` | SQL login. Leave empty, with the password, to use Windows authentication. |
-| `ConnectorStore__Password` | SQL login password. Leave empty when using Windows authentication. |
+| `ConnectorStore__LoginMode` | `Windows_Login` or `SQL_Server_Login`. Omitted values use `Windows_Login`. |
+| `ConnectorStore__User` | SQL login. Required when `LoginMode` is `SQL_Server_Login`. Leave empty for `Windows_Login`. |
+| `ConnectorStore__Password` | SQL login password. Required when `LoginMode` is `SQL_Server_Login`. Leave empty for `Windows_Login`. |
 | `ConnectorStore__SecretsKey` | Base64 32-byte key. Encrypts DocuWare and Sage passwords at rest. The same key must stay with the data. |
+
+`Windows_Login` signs in with the Windows account running the process. `SQL_Server_Login` signs in with `ConnectorStore__User` and `ConnectorStore__Password`, and the instance must have SQL Server authentication enabled.
 
 Startup applies `Database/schema.sql` when `setting` is missing. An empty `setting` table receives blank default rows. Fill those rows in SQL Server and restart the API. Operator accounts are rows in `user`; startup does not import a seed file.
 

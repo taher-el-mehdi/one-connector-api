@@ -2,7 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.SqlClient;
 
-if (args.Length == 0 || !string.Equals(args[0], "add-user", StringComparison.OrdinalIgnoreCase))
+if (args.Length == 0)
 {
     PrintUsage();
     return 1;
@@ -10,11 +10,13 @@ if (args.Length == 0 || !string.Equals(args[0], "add-user", StringComparison.Ord
 
 try
 {
-    var options = UserOptions.Parse(args[1..]);
     var connectionString = ConnectorStore.ConnectionString(FindEnvFile());
-    var id = AddUser(connectionString, options);
-    Console.WriteLine($"Added operator '{options.Username}' ({id}).");
-    return 0;
+    return args[0].ToLowerInvariant() switch
+    {
+        "add-user" => RunAddUser(connectionString, args[1..]),
+        "empty-tables" => RunEmptyTables(connectionString, args[1..]),
+        _ => UnknownCommand(args[0])
+    };
 }
 catch (Exception exception)
 {
@@ -22,18 +24,108 @@ catch (Exception exception)
     return 1;
 }
 
+static int UnknownCommand(string command)
+{
+    Console.Error.WriteLine($"Unknown command '{command}'.");
+    PrintUsage();
+    return 1;
+}
+
+static int RunAddUser(string connectionString, string[] args)
+{
+    var options = UserOptions.Parse(args);
+    var id = AddUser(connectionString, options);
+    Console.WriteLine($"Added operator '{options.Username}' ({id}).");
+    return 0;
+}
+
+static int RunEmptyTables(string connectionString, string[] args)
+{
+    if (args.Length != 1 || !string.Equals(args[0], "--yes", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            "empty-tables deletes rows and cannot be undone. Re-run with --yes.");
+    }
+
+    var deleted = EmptyTables(connectionString);
+    if (deleted.Count == 0)
+    {
+        Console.WriteLine("No matching tables were found. The user table was left unchanged.");
+        return 0;
+    }
+
+    foreach (var (table, count) in deleted)
+    {
+        Console.WriteLine($"Deleted {count} row(s) from {table}.");
+    }
+
+    Console.WriteLine("The user table was left unchanged.");
+    return 0;
+}
+
 static void PrintUsage()
 {
     Console.WriteLine(
         """
-        Add an operator account to the connector store. This command does not start the API.
+        Connector store commands. These commands do not start the API.
 
         Usage:
           dotnet run --project Cli -- add-user --username <name> [--password <password>] [--display-name <name>] [--email <address>]
+          dotnet run --project Cli -- empty-tables --yes
 
-        Connection settings are read from .env in the current directory (ConnectorStore__Server, ConnectorStore__Database, and optional ConnectorStore__User / ConnectorStore__Password).
-        Omit --password to type it without putting it in shell history.
+        add-user inserts one operator. Omit --password to type it without putting it in shell history.
+        empty-tables deletes every row from setting, mapping_field, mapping_table, synchronization,
+        synchronization_filter, synchronization_record, and synchronization_run. It does not touch [user].
+
+        Connection settings are read from .env in the current directory (ConnectorStore__Server, ConnectorStore__Database, ConnectorStore__LoginMode, and ConnectorStore__User / ConnectorStore__Password when LoginMode is SQL_Server_Login).
         """);
+}
+
+static List<(string Table, int Count)> EmptyTables(string connectionString)
+{
+    // Children first so foreign keys to synchronization and mapping_table do not block the delete.
+    string[] tables =
+    [
+        "synchronization_record",
+        "synchronization_run",
+        "synchronization_filter",
+        "synchronization",
+        "mapping_field",
+        "mapping_table",
+        "setting"
+    ];
+
+    using var connection = new SqlConnection(connectionString);
+    connection.Open();
+    using var transaction = connection.BeginTransaction();
+    var deleted = new List<(string Table, int Count)>();
+    foreach (var table in tables)
+    {
+        if (!TableExists(connection, transaction, table))
+        {
+            continue;
+        }
+
+        using var command = new SqlCommand($"DELETE FROM [{table}]", connection, transaction);
+        deleted.Add((table, command.ExecuteNonQuery()));
+    }
+
+    transaction.Commit();
+    return deleted;
+}
+
+static bool TableExists(SqlConnection connection, SqlTransaction transaction, string table)
+{
+    using var command = new SqlCommand(
+        """
+        SELECT 1
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = @table
+        """,
+        connection,
+        transaction);
+    command.Parameters.AddWithValue("@table", table);
+    return command.ExecuteScalar() is not null;
 }
 
 static string FindEnvFile()
@@ -222,19 +314,38 @@ internal static class ConnectorStore
             TrustServerCertificate = true,
             ConnectTimeout = 15
         };
-        var user = Value(values, "ConnectorStore__User");
-        if (user.Length > 0)
-        {
-            builder.IntegratedSecurity = false;
-            builder.UserID = user;
-            builder.Password = Value(values, "ConnectorStore__Password");
-        }
-        else
-        {
-            builder.IntegratedSecurity = true;
-        }
+        ApplyLogin(builder, values);
 
         return builder.ConnectionString;
+    }
+
+    private static void ApplyLogin(SqlConnectionStringBuilder builder, Dictionary<string, string> values)
+    {
+        var mode = Value(values, "ConnectorStore__LoginMode");
+        if (mode.Length == 0 || mode.Equals("Windows_Login", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.IntegratedSecurity = true;
+            return;
+        }
+
+        if (mode.Equals("SQL_Server_Login", StringComparison.OrdinalIgnoreCase))
+        {
+            var user = Value(values, "ConnectorStore__User");
+            var password = Value(values, "ConnectorStore__Password");
+            if (user.Length == 0 || password.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "ConnectorStore__LoginMode is SQL_Server_Login. Set ConnectorStore__User and ConnectorStore__Password in .env.");
+            }
+
+            builder.IntegratedSecurity = false;
+            builder.UserID = user;
+            builder.Password = password;
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "ConnectorStore__LoginMode must be Windows_Login or SQL_Server_Login.");
     }
 
     private static Dictionary<string, string> ReadEnv(string path)

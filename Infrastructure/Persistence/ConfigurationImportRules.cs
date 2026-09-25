@@ -67,9 +67,7 @@ internal static class ConfigurationImportRules
                 Description = description,
                 Key = key,
                 Value = value,
-                Configured = row.Configured,
-                Status = row.Status,
-                Required = row.Required
+                Status = row.Status
             });
         }
 

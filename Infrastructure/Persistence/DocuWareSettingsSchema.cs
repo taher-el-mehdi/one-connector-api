@@ -17,9 +17,9 @@ internal static class DocuWareSettingsSchema
         AddColumn(connection, table, "created_at", "created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)");
         AddColumn(connection, table, "updated_at", "updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)");
         AddColumn(connection, table, "updated_by", "updated_by CHAR(36) NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'");
-        AddColumn(connection, table, "configured", "configured TINYINT(1) NOT NULL DEFAULT 0");
         AddColumn(connection, table, "status", "status TINYINT(1) NOT NULL DEFAULT 0");
-        AddColumn(connection, table, "required", "[required] TINYINT(1) NOT NULL DEFAULT 1");
+        DropColumn(connection, table, "configured");
+        DropColumn(connection, table, "required");
         BackfillActors(connection, table);
     }
 
@@ -31,6 +31,44 @@ internal static class DocuWareSettingsSchema
         }
 
         using var command = new SqlCommand($"ALTER TABLE {table} ADD COLUMN {definition}", connection);
+        command.ExecuteNonQuery();
+    }
+
+    private static void DropColumn(SqlConnection connection, string table, string name)
+    {
+        if (!ColumnExists(connection, table, name))
+        {
+            return;
+        }
+
+        using (var defaults = new SqlCommand(
+            """
+            SELECT dc.name
+            FROM sys.default_constraints AS dc
+            INNER JOIN sys.columns AS c ON c.default_object_id = dc.object_id
+            INNER JOIN sys.tables AS t ON t.object_id = c.object_id
+            WHERE t.name = @table AND c.name = @column
+            """,
+            connection))
+        {
+            defaults.Parameters.AddWithValue("@table", table);
+            defaults.Parameters.AddWithValue("@column", name);
+            using var reader = defaults.ExecuteReader();
+            var names = new List<string>();
+            while (reader.Read())
+            {
+                names.Add(reader.GetString(0));
+            }
+
+            reader.Close();
+            foreach (var constraint in names)
+            {
+                using var drop = new SqlCommand($"ALTER TABLE [{table}] DROP CONSTRAINT [{constraint}]", connection);
+                drop.ExecuteNonQuery();
+            }
+        }
+
+        using var command = new SqlCommand($"ALTER TABLE [{table}] DROP COLUMN [{name}]", connection);
         command.ExecuteNonQuery();
     }
 

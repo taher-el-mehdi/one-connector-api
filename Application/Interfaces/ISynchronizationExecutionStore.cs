@@ -8,17 +8,11 @@ public sealed class SynchronizationRecordWrite
 
     public Guid RunId { get; init; }
 
-    public required string SourceRecordId { get; init; }
+    public required string EntityId { get; init; }
 
-    public string? SourceBusinessKey { get; init; }
+    public string? DocuWareId { get; init; }
 
-    public string? SourceHash { get; init; }
-
-    public string? DestinationRecordId { get; init; }
-
-    public required string Status { get; init; }
-
-    public string? ErrorMessage { get; init; }
+    public string? Error { get; init; }
 }
 
 public interface ISynchronizationExecutionStore
@@ -36,13 +30,12 @@ public interface ISynchronizationExecutionStore
 
     Task UpsertRecordAsync(SynchronizationRecordWrite record, CancellationToken cancellationToken);
 
-    Task<IReadOnlySet<string>> ListInsertedSourceIdsAsync(int synchronizationId, CancellationToken cancellationToken);
+    Task<IReadOnlySet<string>> ListInsertedEntityIdsAsync(int synchronizationId, CancellationToken cancellationToken);
 
     Task<SynchronizationSourceRecordPageDto?> ListRecordsAsync(
         int synchronizationId,
         int page,
         int pageSize,
-        string? status,
         Guid? lastRunId,
         CancellationToken cancellationToken);
 }

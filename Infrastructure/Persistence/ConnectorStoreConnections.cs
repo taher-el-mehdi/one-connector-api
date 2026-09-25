@@ -24,20 +24,40 @@ internal static class ConnectorStoreConnections
             ConnectTimeout = 15
         };
 
-        var user = section["User"]?.Trim() ?? string.Empty;
-        var password = section["Password"] ?? string.Empty;
-        if (user.Length > 0)
+        ApplyLogin(
+            builder,
+            section["LoginMode"],
+            section["User"]?.Trim() ?? string.Empty,
+            section["Password"] ?? string.Empty);
+
+        return builder.ConnectionString;
+    }
+
+    private static void ApplyLogin(SqlConnectionStringBuilder builder, string? loginMode, string user, string password)
+    {
+        var mode = loginMode?.Trim() ?? string.Empty;
+        if (mode.Length == 0 || mode.Equals("Windows_Login", StringComparison.OrdinalIgnoreCase))
         {
+            builder.IntegratedSecurity = true;
+            return;
+        }
+
+        if (mode.Equals("SQL_Server_Login", StringComparison.OrdinalIgnoreCase))
+        {
+            if (user.Length == 0 || password.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "ConnectorStore__LoginMode is SQL_Server_Login. Set ConnectorStore__User and ConnectorStore__Password in .env.");
+            }
+
             builder.IntegratedSecurity = false;
             builder.UserID = user;
             builder.Password = password;
-        }
-        else
-        {
-            builder.IntegratedSecurity = true;
+            return;
         }
 
-        return builder.ConnectionString;
+        throw new InvalidOperationException(
+            "ConnectorStore__LoginMode must be Windows_Login or SQL_Server_Login.");
     }
 
     private static string FirstNonEmpty(string? primary, string? fallback)

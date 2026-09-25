@@ -152,6 +152,34 @@ public sealed class MappingsController : ControllerBase
         }
     }
 
+    [HttpPut("{id:int}/fields/{fieldId:int}")]
+    public async Task<ActionResult<EntityMappingFieldDto>> UpdateField(
+        int id,
+        int fieldId,
+        SaveEntityMappingFieldRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        try
+        {
+            var updated = await _mappings.UpdateFieldAsync(id, fieldId, request, userId, cancellationToken).ConfigureAwait(false);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (Exception ex)
+        {
+            if (ClientError(ex) is { } error)
+            {
+                return error;
+            }
+
+            throw;
+        }
+    }
+
     [HttpDelete("{id:int}/fields/{fieldId:int}")]
     public async Task<IActionResult> DeleteField(int id, int fieldId, CancellationToken cancellationToken)
     {

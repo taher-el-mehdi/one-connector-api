@@ -190,10 +190,8 @@ public sealed class SynchronizationWorker : BackgroundService
             success = result.Failed == 0;
             counts = new SynchronizationRunCounts
             {
-                TotalRecords = result.Created + result.Updated + result.Skipped + result.Failed,
-                SuccessRecords = result.Created + result.Updated,
-                FailedRecords = result.Failed,
-                SkippedRecords = result.Skipped,
+                RecordsInserted = result.Created,
+                RecordsUpdated = result.Updated,
                 ErrorMessage = result.Entities.Select(entity => entity.Error).FirstOrDefault(error => !string.IsNullOrWhiteSpace(error))
             };
         }
@@ -205,7 +203,6 @@ public sealed class SynchronizationWorker : BackgroundService
         {
             counts = new SynchronizationRunCounts
             {
-                FailedRecords = 1,
                 ErrorMessage = $"Exceeded the timeout of {claimed.TimeoutSeconds} seconds."
             };
             _logger.LogError(
@@ -215,7 +212,7 @@ public sealed class SynchronizationWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            counts = new SynchronizationRunCounts { FailedRecords = 1, ErrorMessage = ex.Message };
+            counts = new SynchronizationRunCounts { ErrorMessage = ex.Message };
             _logger.LogError(ex, "SynchronizationId={SynchronizationId} Status=Failed", id);
         }
 

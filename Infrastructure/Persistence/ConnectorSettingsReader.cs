@@ -33,7 +33,6 @@ internal static class ConnectorSettingsReader
         docuWare.ClientId = nextDocuWare.ClientId;
         docuWare.ClientSecret = nextDocuWare.ClientSecret;
         docuWare.Scope = nextDocuWare.Scope;
-        docuWare.Configured = nextDocuWare.Configured;
         docuWare.Status = nextDocuWare.Status;
         sage.Server = nextSage.Server;
         sage.Database = nextSage.Database;
@@ -44,7 +43,6 @@ internal static class ConnectorSettingsReader
         sage.CommandTimeoutSeconds = nextSage.CommandTimeoutSeconds;
         sage.SuppliersOnly = nextSage.SuppliersOnly;
         sage.ChartOfAccountsTypeZeroOnly = nextSage.ChartOfAccountsTypeZeroOnly;
-        sage.Configured = nextSage.Configured;
         sage.Status = nextSage.Status;
         synchronization.Enabled = nextSynchronization.Enabled;
         synchronization.IntervalSeconds = nextSynchronization.IntervalSeconds;
@@ -54,7 +52,6 @@ internal static class ConnectorSettingsReader
         synchronization.ApplySageWrites = nextSynchronization.ApplySageWrites;
         synchronization.SageToDocuWare = nextSynchronization.SageToDocuWare;
         synchronization.DocuWareToSage = nextSynchronization.DocuWareToSage;
-        synchronization.Configured = nextSynchronization.Configured;
         synchronization.Status = nextSynchronization.Status;
     }
 
@@ -102,7 +99,6 @@ internal static class ConnectorSettingsReader
             ClientId = Text(docuWareMap, SettingKeys.ClientId),
             ClientSecret = SecretProtector.Unprotect(Optional(docuWareMap, SettingKeys.ClientSecretProtected), secretsKey),
             Scope = Text(docuWareMap, SettingKeys.Scope, "docuware.platform openid"),
-            Configured = Flag(connection, SettingTable.DocuWare, "configured"),
             Status = Flag(connection, SettingTable.DocuWare, "status")
         };
         var sage = new SageOptions
@@ -118,7 +114,6 @@ internal static class ConnectorSettingsReader
             CommandTimeoutSeconds = Int(erpMap, SettingKeys.CommandTimeoutSeconds, 30),
             SuppliersOnly = Bool(erpMap, SettingKeys.SuppliersOnly, true),
             ChartOfAccountsTypeZeroOnly = Bool(erpMap, SettingKeys.ChartTypeZeroOnly, true),
-            Configured = Flag(connection, SettingTable.Sage, "configured"),
             Status = Flag(connection, SettingTable.Sage, "status")
         };
         var synchronization = new SynchronizationOptions
@@ -131,7 +126,6 @@ internal static class ConnectorSettingsReader
             ApplySageWrites = Bool(syncMap, SettingKeys.ApplySageWrites, true),
             SageToDocuWare = Bool(syncMap, SettingKeys.SageToDocuWare, true),
             DocuWareToSage = Bool(syncMap, SettingKeys.DocuWareToSage, true),
-            Configured = Flag(connection, SettingTable.Synchronization, "configured"),
             Status = Flag(connection, SettingTable.Synchronization, "status")
         };
 

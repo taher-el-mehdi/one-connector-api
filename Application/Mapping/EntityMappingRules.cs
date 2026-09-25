@@ -1,3 +1,5 @@
+using DocuWareSageConnector.Application.DTOs;
+
 namespace DocuWareSageConnector.Application.Mapping;
 
 public readonly record struct MappingConfigRef(string Code, string Type)
@@ -21,7 +23,9 @@ public readonly record struct NormalizedMappingField(
     string? EntityTypeName,
     string? CabinetTypeName,
     int? EntityTypeLong,
-    int? CabinetTypeLong);
+    int? CabinetTypeLong,
+    bool IsKey,
+    int? KeyOrder);
 
 public static class EntityMappingRules
 {
@@ -69,14 +73,54 @@ public static class EntityMappingRules
         string? entityTypeName,
         string? cabinetTypeName,
         int? entityTypeLong,
-        int? cabinetTypeLong) =>
-        new(
+        int? cabinetTypeLong,
+        bool isKey,
+        int? keyOrder)
+    {
+        var order = KeyOrder(isKey, keyOrder);
+        return new(
             Require(entityFieldName, "Entity field name", NameMaxLength),
             Require(cabinetFieldName, "Cabinet field name", NameMaxLength),
             Optional(entityTypeName, "Entity type name", TypeNameMaxLength),
             Optional(cabinetTypeName, "Cabinet type name", TypeNameMaxLength),
             Length(entityTypeLong, "Entity type length"),
-            Length(cabinetTypeLong, "Cabinet type length"));
+            Length(cabinetTypeLong, "Cabinet type length"),
+            isKey,
+            order);
+    }
+
+    public static IReadOnlyList<string> CompositeKey(IEnumerable<EntityMappingFieldDto> fields) =>
+        fields
+            .Where(field => field.IsKey)
+            .OrderBy(field => field.KeyOrder ?? int.MaxValue)
+            .ThenBy(field => field.EntityFieldName, StringComparer.OrdinalIgnoreCase)
+            .Select(field => field.EntityFieldName)
+            .ToArray();
+
+    private static int? KeyOrder(bool isKey, int? keyOrder)
+    {
+        if (!isKey)
+        {
+            if (keyOrder is not null)
+            {
+                throw new ArgumentException("Key order is only allowed when the field is a key.");
+            }
+
+            return null;
+        }
+
+        if (keyOrder is null)
+        {
+            throw new ArgumentException("Key order is required when the field is a key.");
+        }
+
+        if (keyOrder < 1)
+        {
+            throw new ArgumentException("Key order must be a whole number greater than or equal to 1.");
+        }
+
+        return keyOrder;
+    }
 
     private static string Require(string? value, string label, int maxLength)
     {

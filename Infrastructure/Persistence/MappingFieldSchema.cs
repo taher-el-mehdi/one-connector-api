@@ -12,10 +12,16 @@ internal static class MappingFieldSchema
             return;
         }
 
-        if (ColumnExists(connection, "id_mapping_table"))
+        if (!ColumnExists(connection, "id_mapping_table"))
         {
-            return;
+            RenameMappingColumn(connection);
         }
+
+        EnsureKeyColumns(connection);
+    }
+
+    private static void RenameMappingColumn(SqlConnection connection)
+    {
 
         if (!ColumnExists(connection, "id_oc_mapping_table"))
         {
@@ -58,6 +64,8 @@ internal static class MappingFieldSchema
                 [cabinet_type_name]  NVARCHAR(128) NULL,
                 [entity_type_long]   INT           NULL,
                 [cabinet_type_long]  INT           NULL,
+                [is_key]             BIT           NOT NULL CONSTRAINT [DF_mapping_field_is_key] DEFAULT 0,
+                [key_order]          INT           NULL,
                 [created_by]         CHAR(36)      NOT NULL CONSTRAINT [df_mapping_field_created_by] DEFAULT '00000000-0000-0000-0000-000000000000',
                 [created_at]         DATETIME2(6)  NOT NULL CONSTRAINT [df_mapping_field_created_at] DEFAULT SYSUTCDATETIME(),
                 [updated_at]         DATETIME2(6)  NOT NULL CONSTRAINT [df_mapping_field_updated_at] DEFAULT SYSUTCDATETIME(),
@@ -69,6 +77,41 @@ internal static class MappingFieldSchema
                     ON DELETE CASCADE
             )
             """);
+    }
+
+    private static void EnsureKeyColumns(SqlConnection connection)
+    {
+        var hasKey = ColumnExists(connection, "is_key");
+        var hasOrder = ColumnExists(connection, "key_order");
+        if (hasKey && hasOrder)
+        {
+            return;
+        }
+
+        if (!hasKey && !hasOrder)
+        {
+            Execute(
+                connection,
+                """
+                ALTER TABLE dbo.mapping_field
+                ADD
+                    is_key BIT NOT NULL CONSTRAINT DF_mapping_field_is_key DEFAULT 0,
+                    key_order INT NULL
+                """);
+            return;
+        }
+
+        if (!hasKey)
+        {
+            Execute(
+                connection,
+                "ALTER TABLE dbo.mapping_field ADD is_key BIT NOT NULL CONSTRAINT DF_mapping_field_is_key DEFAULT 0");
+        }
+
+        if (!hasOrder)
+        {
+            Execute(connection, "ALTER TABLE dbo.mapping_field ADD key_order INT NULL");
+        }
     }
 
     private static void Execute(SqlConnection connection, string sql)

@@ -1,16 +1,35 @@
 namespace DocuWareSageConnector.Application.Synchronization;
 
+public readonly record struct RecurrenceWeekdays(
+    bool Mondays,
+    bool Tuesdays,
+    bool Wednesdays,
+    bool Thursdays,
+    bool Fridays,
+    bool Saturdays,
+    bool Sundays)
+{
+    public bool Any => Mondays || Tuesdays || Wednesdays || Thursdays || Fridays || Saturdays || Sundays;
+
+    public bool Includes(DayOfWeek day) =>
+        day switch
+        {
+            DayOfWeek.Monday => Mondays,
+            DayOfWeek.Tuesday => Tuesdays,
+            DayOfWeek.Wednesday => Wednesdays,
+            DayOfWeek.Thursday => Thursdays,
+            DayOfWeek.Friday => Fridays,
+            DayOfWeek.Saturday => Saturdays,
+            _ => Sundays
+        };
+}
+
 public static class RecurrenceSchedule
 {
-    public static readonly string[] Weekdays =
-    [
-        "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"
-    ];
-
     public static NormalizedRecurrence Normalize(
         bool? enabled,
         string? type,
-        string? days,
+        RecurrenceWeekdays weekdays,
         string? time,
         int? intervalValue,
         string? intervalUnit,
@@ -19,7 +38,7 @@ public static class RecurrenceSchedule
     {
         if (enabled is not true)
         {
-            return new NormalizedRecurrence(false, null, null, null, null, null, null, null);
+            return new NormalizedRecurrence(false, null, default, null, null, null, null, null);
         }
 
         var frequency = type?.Trim().ToUpperInvariant() ?? string.Empty;
@@ -34,21 +53,20 @@ public static class RecurrenceSchedule
             throw new ArgumentException("Choose a timezone.");
         }
 
-        var selectedDays = ParseDays(days);
         TimeSpan? clock = null;
         int? every = null;
         string? unit = null;
         if (frequency is "DAILY" or "WEEKLY")
         {
             clock = ParseTime(time);
-            if (frequency == "WEEKLY" && selectedDays.Count == 0)
+            if (frequency == "WEEKLY" && !weekdays.Any)
             {
                 throw new ArgumentException("Choose at least one weekday.");
             }
 
             if (frequency == "DAILY")
             {
-                selectedDays = [];
+                weekdays = default;
             }
         }
         else
@@ -66,8 +84,7 @@ public static class RecurrenceSchedule
             }
         }
 
-        var storedDays = selectedDays.Count == 0 ? null : string.Join(",", selectedDays);
-        var settings = new NormalizedRecurrence(true, frequency, storedDays, clock, every, unit, zoneId, null);
+        var settings = new NormalizedRecurrence(true, frequency, weekdays, clock, every, unit, zoneId, null);
         var next = NextUtc(settings, utcNow, zone);
         return settings with { NextRunAt = next };
     }
@@ -76,23 +93,22 @@ public static class RecurrenceSchedule
     {
         zone ??= TimeZoneInfo.FindSystemTimeZoneById(settings.Timezone ?? "UTC");
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc), zone);
-        var days = ParseDays(settings.Days);
         var localNext = settings.Type switch
         {
-            "DAILY" => NextAtClock(localNow, settings.TimeOfDay!.Value, null),
-            "WEEKLY" => NextAtClock(localNow, settings.TimeOfDay!.Value, days),
-            "INTERVAL" => NextInterval(localNow, settings.IntervalValue!.Value, settings.IntervalUnit!, days),
+            "DAILY" => NextAtClock(localNow, settings.TimeOfDay!.Value, default),
+            "WEEKLY" => NextAtClock(localNow, settings.TimeOfDay!.Value, settings.Weekdays),
+            "INTERVAL" => NextInterval(localNow, settings.IntervalValue!.Value, settings.IntervalUnit!, settings.Weekdays),
             _ => localNow.AddMinutes(1)
         };
         return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localNext, DateTimeKind.Unspecified), zone);
     }
 
-    private static DateTime NextAtClock(DateTime localNow, TimeSpan clock, IReadOnlySet<string>? days)
+    private static DateTime NextAtClock(DateTime localNow, TimeSpan clock, RecurrenceWeekdays days)
     {
         for (var offset = 0; offset < 8; offset++)
         {
             var day = localNow.Date.AddDays(offset);
-            if (days is { Count: > 0 } && !days.Contains(Weekday(day)))
+            if (days.Any && !days.Includes(day.DayOfWeek))
             {
                 continue;
             }
@@ -107,14 +123,14 @@ public static class RecurrenceSchedule
         return localNow.Date.AddDays(1).Add(clock);
     }
 
-    private static DateTime NextInterval(DateTime localNow, int value, string unit, IReadOnlySet<string> days)
+    private static DateTime NextInterval(DateTime localNow, int value, string unit, RecurrenceWeekdays days)
     {
         if (unit == "DAY")
         {
             var cursor = localNow.AddDays(value);
             for (var step = 0; step < 14; step++)
             {
-                if (days.Count == 0 || days.Contains(Weekday(cursor)))
+                if (!days.Any || days.Includes(cursor.DayOfWeek))
                 {
                     return cursor;
                 }
@@ -127,7 +143,7 @@ public static class RecurrenceSchedule
 
         var span = unit == "HOUR" ? TimeSpan.FromHours(value) : TimeSpan.FromMinutes(value);
         var next = localNow.Add(span);
-        if (days.Count == 0 || days.Contains(Weekday(next)))
+        if (!days.Any || days.Includes(next.DayOfWeek))
         {
             return next;
         }
@@ -135,35 +151,13 @@ public static class RecurrenceSchedule
         for (var offset = 1; offset <= 7; offset++)
         {
             var day = localNow.Date.AddDays(offset);
-            if (days.Contains(Weekday(day)))
+            if (days.Includes(day.DayOfWeek))
             {
                 return day;
             }
         }
 
         return next;
-    }
-
-    private static HashSet<string> ParseDays(string? days)
-    {
-        var selected = new HashSet<string>(StringComparer.Ordinal);
-        if (string.IsNullOrWhiteSpace(days))
-        {
-            return selected;
-        }
-
-        foreach (var part in days.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var day = part.ToUpperInvariant();
-            if (!Weekdays.Contains(day, StringComparer.Ordinal))
-            {
-                throw new ArgumentException("Weekdays must be Monday through Sunday.");
-            }
-
-            selected.Add(day);
-        }
-
-        return selected;
     }
 
     private static TimeSpan ParseTime(string? time)
@@ -177,24 +171,12 @@ public static class RecurrenceSchedule
 
         return clock;
     }
-
-    private static string Weekday(DateTime value) =>
-        value.DayOfWeek switch
-        {
-            DayOfWeek.Monday => "MONDAY",
-            DayOfWeek.Tuesday => "TUESDAY",
-            DayOfWeek.Wednesday => "WEDNESDAY",
-            DayOfWeek.Thursday => "THURSDAY",
-            DayOfWeek.Friday => "FRIDAY",
-            DayOfWeek.Saturday => "SATURDAY",
-            _ => "SUNDAY"
-        };
 }
 
 public sealed record NormalizedRecurrence(
     bool Enabled,
     string? Type,
-    string? Days,
+    RecurrenceWeekdays Weekdays,
     TimeSpan? TimeOfDay,
     int? IntervalValue,
     string? IntervalUnit,

@@ -12,27 +12,34 @@ public sealed class SynchronizationStore : ISynchronizationStore
         """
         s.id, s.direction, s.source, s.destination, s.id_mapping_table, s.code, s.description, s.status,
         s.max_retries, s.timeout_seconds, s.created_at, s.updated_at,
-        s.recurrence_enabled, s.recurrence_type, s.recurrence_days, s.recurrence_time,
+        s.recurrence_enabled, s.recurrence_type,
+        s.recurrence_mondays, s.recurrence_tuesdays, s.recurrence_wednesdays, s.recurrence_thursdays,
+        s.recurrence_fridays, s.recurrence_saturdays, s.recurrence_sundays, s.recurrence_time,
         s.interval_value, s.interval_unit, s.timezone,
-        pending.started_at AS next_run_at,
-        COALESCE(latest.retry_count, 0) AS retry_count
+        pending.start_at AS next_run_at,
+        COALESCE(retries.retry_count, 0) AS retry_count
         """;
 
     private const string SelectFrom =
         """
         FROM synchronization AS s
         OUTER APPLY (
-            SELECT TOP (1) started_at
+            SELECT TOP (1) start_at
             FROM synchronization_run
             WHERE synchronization_id = s.id AND status = N'pending'
-            ORDER BY started_at, id
+            ORDER BY start_at, id
         ) AS pending
         OUTER APPLY (
-            SELECT TOP (1) retry_count
-            FROM synchronization_run
-            WHERE synchronization_id = s.id
-            ORDER BY created_at DESC, id DESC
-        ) AS latest
+            SELECT COUNT(*) AS retry_count
+            FROM synchronization_run AS failed
+            WHERE failed.synchronization_id = s.id
+              AND failed.status = N'failed'
+              AND failed.created_at > COALESCE((
+                    SELECT MAX(ok.created_at)
+                    FROM synchronization_run AS ok
+                    WHERE ok.synchronization_id = s.id AND ok.status = N'success'
+                ), CONVERT(datetime2, '0001-01-01'))
+        ) AS retries
         """;
 
     private readonly string _connectionString;
@@ -102,19 +109,23 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 INSERT INTO synchronization
                     (direction, source, destination, id_mapping_table, code, description, status,
                      max_retries, timeout_seconds, created_by, created_at, updated_at, updated_by,
-                     recurrence_enabled, recurrence_type, recurrence_days, recurrence_time,
+                     recurrence_enabled, recurrence_type,
+                     recurrence_mondays, recurrence_tuesdays, recurrence_wednesdays, recurrence_thursdays,
+                     recurrence_fridays, recurrence_saturdays, recurrence_sundays, recurrence_time,
                      interval_value, interval_unit, timezone)
                 OUTPUT INSERTED.id
                 VALUES
                     (@direction, @source, @destination, @mappingTableId, @code, @description, NULL,
                      @maxRetries, @timeoutSeconds, @actor, @now, @now, @actor,
-                     @recurrenceEnabled, @recurrenceType, @recurrenceDays, @recurrenceTime,
+                     @recurrenceEnabled, @recurrenceType,
+                     @recurrenceMondays, @recurrenceTuesdays, @recurrenceWednesdays, @recurrenceThursdays,
+                     @recurrenceFridays, @recurrenceSaturdays, @recurrenceSundays, @recurrenceTime,
                      @intervalValue, @intervalUnit, @timezone)
                 """,
                 connection);
             Bind(command, values, actor, now);
             var id = SqlStore.InsertedId(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
-            await InsertPendingRunAsync(connection, null, id, nextRunAt, 0, cancellationToken).ConfigureAwait(false);
+            await InsertPendingRunAsync(connection, null, id, nextRunAt, cancellationToken).ConfigureAwait(false);
             return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false)
                    ?? throw new SynchronizationStoreException(
                        "The synchronization was saved but could not be read back.",
@@ -167,7 +178,13 @@ public sealed class SynchronizationStore : ISynchronizationStore
                     timeout_seconds = @timeoutSeconds,
                     recurrence_enabled = @recurrenceEnabled,
                     recurrence_type = @recurrenceType,
-                    recurrence_days = @recurrenceDays,
+                    recurrence_mondays = @recurrenceMondays,
+                    recurrence_tuesdays = @recurrenceTuesdays,
+                    recurrence_wednesdays = @recurrenceWednesdays,
+                    recurrence_thursdays = @recurrenceThursdays,
+                    recurrence_fridays = @recurrenceFridays,
+                    recurrence_saturdays = @recurrenceSaturdays,
+                    recurrence_sundays = @recurrenceSundays,
                     recurrence_time = @recurrenceTime,
                     interval_value = @intervalValue,
                     interval_unit = @intervalUnit,
@@ -376,7 +393,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 return null;
             }
 
-            await InsertPendingRunAsync(connection, null, id, now, 0, cancellationToken).ConfigureAwait(false);
+            await InsertPendingRunAsync(connection, null, id, now, cancellationToken).ConfigureAwait(false);
             return await ReadAsync(connection, id, cancellationToken).ConfigureAwait(false);
         }
         catch (SqlException ex)
@@ -395,8 +412,8 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 SELECT synchronization_id
                 FROM synchronization_run
                 WHERE status = N'pending'
-                  AND started_at <= @now
-                ORDER BY started_at, synchronization_id
+                  AND start_at <= @now
+                ORDER BY start_at, synchronization_id
                 """,
                 connection);
             command.Parameters.AddWithValue("@now", utcNow);
@@ -424,15 +441,15 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 """
                 UPDATE synchronization_run
                 SET status = N'running',
-                    started_at = @now
+                    start_at = @now
                 OUTPUT INSERTED.id
                 WHERE id = (
                     SELECT TOP (1) id
                     FROM synchronization_run
                     WHERE synchronization_id = @id
                       AND status = N'pending'
-                      AND started_at <= @now
-                    ORDER BY started_at, id
+                      AND start_at <= @now
+                    ORDER BY start_at, id
                 )
                 """,
                 connection);
@@ -487,7 +504,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
             }
 
             var status = success ? "success" : "failed";
-            var retryCount = success ? 0 : current.RetryCount + 1;
+            var retryCount = success ? 0 : await CountFailedSinceSuccessAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false) + 1;
             var schedule = await ReadRecurrenceAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
             DateTime? nextRunAt;
             if (!success && retryCount <= current.MaxRetries)
@@ -511,13 +528,9 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 """
                 UPDATE synchronization_run
                 SET status = @status,
-                    retry_count = @retryCount,
                     completed_at = @now,
-                    total_records = @totalRecords,
-                    processed_records = @processedRecords,
-                    success_records = @successRecords,
-                    failed_records = @failedRecords,
-                    skipped_records = @skippedRecords,
+                    records_inserted = @recordsInserted,
+                    records_updated = @recordsUpdated,
                     error_message = @errorMessage
                 WHERE id = @runId;
 
@@ -529,20 +542,16 @@ public sealed class SynchronizationStore : ISynchronizationStore
                 connection,
                 transaction);
             command.Parameters.AddWithValue("@status", status);
-            command.Parameters.AddWithValue("@retryCount", retryCount);
             command.Parameters.AddWithValue("@now", utcNow);
             command.Parameters.AddWithValue("@runId", current.RunId);
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@totalRecords", counts.TotalRecords);
-            command.Parameters.AddWithValue("@processedRecords", counts.SuccessRecords + counts.FailedRecords + counts.SkippedRecords);
-            command.Parameters.AddWithValue("@successRecords", counts.SuccessRecords);
-            command.Parameters.AddWithValue("@failedRecords", counts.FailedRecords);
-            command.Parameters.AddWithValue("@skippedRecords", counts.SkippedRecords);
+            command.Parameters.AddWithValue("@recordsInserted", counts.RecordsInserted);
+            command.Parameters.AddWithValue("@recordsUpdated", counts.RecordsUpdated);
             command.Parameters.AddWithValue("@errorMessage", (object?)Truncate(counts.ErrorMessage, 4000) ?? DBNull.Value);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (nextRunAt is not null)
             {
-                await InsertPendingRunAsync(connection, transaction, id, nextRunAt.Value, retryCount, cancellationToken)
+                await InsertPendingRunAsync(connection, transaction, id, nextRunAt.Value, cancellationToken)
                     .ConfigureAwait(false);
             }
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -566,7 +575,14 @@ public sealed class SynchronizationStore : ISynchronizationStore
             request.NextRunAt,
             request.RecurrenceEnabled,
             request.RecurrenceType,
-            request.RecurrenceDays,
+            new RecurrenceWeekdays(
+                request.RecurrenceMondays,
+                request.RecurrenceTuesdays,
+                request.RecurrenceWednesdays,
+                request.RecurrenceThursdays,
+                request.RecurrenceFridays,
+                request.RecurrenceSaturdays,
+                request.RecurrenceSundays),
             request.RecurrenceTime,
             request.IntervalValue,
             request.IntervalUnit,
@@ -603,7 +619,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
     {
         await using var command = new SqlCommand(
             """
-            SELECT s.max_retries, run.retry_count, run.id AS run_id
+            SELECT s.max_retries, run.id AS run_id
             FROM synchronization AS s
             INNER JOIN synchronization_run AS run
               ON run.synchronization_id = s.id
@@ -621,8 +637,7 @@ public sealed class SynchronizationStore : ISynchronizationStore
 
         return new QueueState(
             reader.GetGuid(reader.GetOrdinal("run_id")),
-            reader.GetInt32("max_retries"),
-            reader.GetInt32("retry_count"));
+            reader.GetInt32("max_retries"));
     }
 
     private static SynchronizationRecordDto ReadRow(SqlDataReader reader) =>
@@ -641,7 +656,13 @@ public sealed class SynchronizationStore : ISynchronizationStore
             NextRunAt = ToOffset(ReadUtcOrNull(reader, "next_run_at")),
             RecurrenceEnabled = reader.GetBoolean(reader.GetOrdinal("recurrence_enabled")),
             RecurrenceType = ReadStringOrNull(reader, "recurrence_type"),
-            RecurrenceDays = ReadStringOrNull(reader, "recurrence_days"),
+            RecurrenceMondays = reader.GetBoolean(reader.GetOrdinal("recurrence_mondays")),
+            RecurrenceTuesdays = reader.GetBoolean(reader.GetOrdinal("recurrence_tuesdays")),
+            RecurrenceWednesdays = reader.GetBoolean(reader.GetOrdinal("recurrence_wednesdays")),
+            RecurrenceThursdays = reader.GetBoolean(reader.GetOrdinal("recurrence_thursdays")),
+            RecurrenceFridays = reader.GetBoolean(reader.GetOrdinal("recurrence_fridays")),
+            RecurrenceSaturdays = reader.GetBoolean(reader.GetOrdinal("recurrence_saturdays")),
+            RecurrenceSundays = reader.GetBoolean(reader.GetOrdinal("recurrence_sundays")),
             RecurrenceTime = ReadTimeOrNull(reader, "recurrence_time"),
             IntervalValue = reader.IsDBNull(reader.GetOrdinal("interval_value")) ? null : reader.GetInt32("interval_value"),
             IntervalUnit = ReadStringOrNull(reader, "interval_unit"),
@@ -801,7 +822,14 @@ public sealed class SynchronizationStore : ISynchronizationStore
         command.Parameters.AddWithValue("@timeoutSeconds", values.TimeoutSeconds);
         command.Parameters.AddWithValue("@recurrenceEnabled", values.Recurrence.Enabled);
         command.Parameters.AddWithValue("@recurrenceType", (object?)values.Recurrence.Type ?? DBNull.Value);
-        command.Parameters.AddWithValue("@recurrenceDays", (object?)values.Recurrence.Days ?? DBNull.Value);
+        var weekdays = values.Recurrence.Weekdays;
+        command.Parameters.AddWithValue("@recurrenceMondays", weekdays.Mondays);
+        command.Parameters.AddWithValue("@recurrenceTuesdays", weekdays.Tuesdays);
+        command.Parameters.AddWithValue("@recurrenceWednesdays", weekdays.Wednesdays);
+        command.Parameters.AddWithValue("@recurrenceThursdays", weekdays.Thursdays);
+        command.Parameters.AddWithValue("@recurrenceFridays", weekdays.Fridays);
+        command.Parameters.AddWithValue("@recurrenceSaturdays", weekdays.Saturdays);
+        command.Parameters.AddWithValue("@recurrenceSundays", weekdays.Sundays);
         command.Parameters.Add(new SqlParameter("@recurrenceTime", System.Data.SqlDbType.Time)
         {
             Value = (object?)values.Recurrence.TimeOfDay ?? DBNull.Value
@@ -829,31 +857,53 @@ public sealed class SynchronizationStore : ISynchronizationStore
         await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         if (nextRunAt is not null)
         {
-            await InsertPendingRunAsync(connection, null, synchronizationId, nextRunAt.Value, 0, cancellationToken)
+            await InsertPendingRunAsync(connection, null, synchronizationId, nextRunAt.Value, cancellationToken)
                 .ConfigureAwait(false);
         }
+    }
+
+    private static async Task<int> CountFailedSinceSuccessAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        int synchronizationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM synchronization_run AS failed
+            WHERE failed.synchronization_id = @synchronizationId
+              AND failed.status = N'failed'
+              AND failed.created_at > COALESCE((
+                    SELECT MAX(ok.created_at)
+                    FROM synchronization_run AS ok
+                    WHERE ok.synchronization_id = @synchronizationId AND ok.status = N'success'
+                ), CONVERT(datetime2, '0001-01-01'))
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
     }
 
     private static async Task InsertPendingRunAsync(
         SqlConnection connection,
         SqlTransaction? transaction,
         int synchronizationId,
-        DateTime startedAt,
-        int retryCount,
+        DateTime startAt,
         CancellationToken cancellationToken)
     {
         await using var command = new SqlCommand(
             """
             INSERT INTO synchronization_run
-                (synchronization_id, status, started_at, retry_count, created_at)
+                (synchronization_id, status, start_at, created_at)
             VALUES
-                (@synchronizationId, N'pending', @startedAt, @retryCount, SYSUTCDATETIME())
+                (@synchronizationId, N'pending', @startAt, SYSUTCDATETIME())
             """,
             connection,
             transaction);
         command.Parameters.AddWithValue("@synchronizationId", synchronizationId);
-        command.Parameters.AddWithValue("@startedAt", startedAt);
-        command.Parameters.AddWithValue("@retryCount", retryCount);
+        command.Parameters.AddWithValue("@startAt", startAt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -865,7 +915,9 @@ public sealed class SynchronizationStore : ISynchronizationStore
     {
         await using var command = new SqlCommand(
             """
-            SELECT recurrence_enabled, recurrence_type, recurrence_days, recurrence_time,
+            SELECT recurrence_enabled, recurrence_type,
+                   recurrence_mondays, recurrence_tuesdays, recurrence_wednesdays, recurrence_thursdays,
+                   recurrence_fridays, recurrence_saturdays, recurrence_sundays, recurrence_time,
                    interval_value, interval_unit, timezone
             FROM synchronization
             WHERE id = @id
@@ -876,17 +928,24 @@ public sealed class SynchronizationStore : ISynchronizationStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || !reader.GetBoolean(0))
         {
-            return new NormalizedRecurrence(false, null, null, null, null, null, null, null);
+            return new NormalizedRecurrence(false, null, default, null, null, null, null, null);
         }
 
         return new NormalizedRecurrence(
             true,
             reader.IsDBNull(1) ? null : reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetTimeSpan(3),
-            reader.IsDBNull(4) ? null : reader.GetInt32(4),
-            reader.IsDBNull(5) ? null : reader.GetString(5),
-            reader.IsDBNull(6) ? null : reader.GetString(6),
+            new RecurrenceWeekdays(
+                reader.GetBoolean(2),
+                reader.GetBoolean(3),
+                reader.GetBoolean(4),
+                reader.GetBoolean(5),
+                reader.GetBoolean(6),
+                reader.GetBoolean(7),
+                reader.GetBoolean(8)),
+            reader.IsDBNull(9) ? null : reader.GetTimeSpan(9),
+            reader.IsDBNull(10) ? null : reader.GetInt32(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            reader.IsDBNull(12) ? null : reader.GetString(12),
             null);
     }
 
@@ -938,5 +997,5 @@ public sealed class SynchronizationStore : ISynchronizationStore
         return connection;
     }
 
-    private sealed record QueueState(Guid RunId, int MaxRetries, int RetryCount);
+    private sealed record QueueState(Guid RunId, int MaxRetries);
 }

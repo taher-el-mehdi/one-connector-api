@@ -21,7 +21,6 @@ internal static class ConnectorConfigurationMap
             ["DocuWare:ClientId"] = docuWare.ClientId,
             ["DocuWare:ClientSecret"] = docuWare.ClientSecret,
             ["DocuWare:Scope"] = docuWare.Scope,
-            ["DocuWare:Configured"] = docuWare.Configured ? "true" : "false",
             ["DocuWare:Status"] = docuWare.Status ? "true" : "false",
             ["Sage:Server"] = sage.Server,
             ["Sage:Database"] = sage.Database,
@@ -32,7 +31,6 @@ internal static class ConnectorConfigurationMap
             ["Sage:CommandTimeoutSeconds"] = sage.CommandTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
             ["Sage:SuppliersOnly"] = sage.SuppliersOnly ? "true" : "false",
             ["Sage:ChartOfAccountsTypeZeroOnly"] = sage.ChartOfAccountsTypeZeroOnly ? "true" : "false",
-            ["Sage:Configured"] = sage.Configured ? "true" : "false",
             ["Sage:Status"] = sage.Status ? "true" : "false",
             ["Synchronization:Enabled"] = synchronization.Enabled ? "true" : "false",
             ["Synchronization:IntervalSeconds"] = synchronization.IntervalSeconds.ToString(CultureInfo.InvariantCulture),
@@ -42,7 +40,6 @@ internal static class ConnectorConfigurationMap
             ["Synchronization:ApplySageWrites"] = synchronization.ApplySageWrites ? "true" : "false",
             ["Synchronization:SageToDocuWare"] = synchronization.SageToDocuWare ? "true" : "false",
             ["Synchronization:DocuWareToSage"] = synchronization.DocuWareToSage ? "true" : "false",
-            ["Synchronization:Configured"] = synchronization.Configured ? "true" : "false",
             ["Synchronization:Status"] = synchronization.Status ? "true" : "false",
             ["Tracking:DatabasePath"] = tracking.DatabasePath
         };
